@@ -3571,6 +3571,13 @@ impl App {
         if same_uri && !new_occurrence {
             return;
         }
+
+        // Custom Passive Mode: open the album on a confirmed track change.
+        if self.settings.passive_mode && !same_uri {
+            if let Some(album_id) = now.album_id.clone() {
+                self.actions.push(Action::Open(Page::Album(album_id)));
+            }
+        }
         // A new track is a new resume point.
         self.session_dirty = true;
         let queue_already_updated =
@@ -8327,6 +8334,19 @@ impl App {
                 self.track_requests.remove(&id);
                 match result {
                     Ok(track) => {
+                        // Custom Passive Mode fallback: metadata arrived after the track change.
+                        let passive_album = if self.settings.passive_mode
+                            && self.now_playing_live().is_some_and(|now| {
+                                now.uri == track.uri && now.album_id.is_none()
+                            })
+                        {
+                            track.album.as_ref().map(|album| album.id.clone())
+                        } else {
+                            None
+                        };
+                        if let Some(album_id) = passive_album {
+                            self.actions.push(Action::Open(Page::Album(album_id)));
+                        }
                         self.remember_track_recording(&track);
                         self.request_recording_candidates(&track);
                         if self.liked_songs.update_track(&track) {

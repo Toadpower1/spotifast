@@ -622,6 +622,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
     let normalize_volume = gettext(locale, "Normalize volume");
     let autoplay = gettext(locale, "Autoplay");
     let gapless = gettext(locale, "Gapless playback");
+    let passive_mode = gettext(locale, "Passive mode");
     let keep_playing = gettext(locale, "Keep music playing when the window closes");
     let update_checks = gettext(locale, "Automatic update checks");
     let audio_cache = gettext(locale, "Audio cache");
@@ -730,10 +731,31 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
         )
         .when(!cfg!(target_os = "macos")),
         RowText::new(start_with_computer.clone(), start_detail).when(start_available),
+        RowText::new(
+            passive_mode.clone(),
+            gettext(
+                locale,
+                "Automatically open the album page when the playing track changes.",
+            ),
+        ),
     ];
     if section_matches(&needle, &playback, &playback_rows) {
         any_visible = true;
         section(ui, &palette, &playback, |ui| {
+        // Custom Passive Mode: keep this row at the end of playback_rows.
+        let passive_row = &playback_rows[playback_rows.len() - 1];
+        filtered_row(ui, &palette, &needle, &playback, passive_row, |ui| {
+            if widgets::switch(
+                ui,
+                &palette,
+                &passive_mode,
+                &mut app.settings.passive_mode,
+            )
+            .changed()
+            {
+                changed = true;
+            }
+        });
             filtered_row(ui, &palette, &needle, &playback, &playback_rows[0], |ui| {
                 if let Some(label) = action {
                     if theme::pill_button(ui, &palette, &label, true).clicked() {
