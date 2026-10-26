@@ -1,0 +1,86 @@
+name: Release Spotifast Passive Mode
+
+on:
+  push:
+    tags:
+      - "passive-v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release-windows:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout tagged source
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Install Spotifast Rust toolchain
+        shell: pwsh
+        run: |
+          $match = Select-String -Path rust-toolchain.toml -Pattern '^\s*channel\s*=\s*"([^"]+)"'
+          if (-not $match) {
+            throw "Could not find Rust channel in rust-toolchain.toml"
+          }
+
+          $channel = $match.Matches[0].Groups[1].Value
+          Write-Host "Spotifast Rust toolchain: $channel"
+
+          rustup toolchain install $channel --profile minimal --no-self-update
+          rustup override set $channel
+
+          rustc --version
+          cargo --version
+
+      - name: Build release
+        shell: pwsh
+        run: |
+          cargo build --locked --release --no-default-features
+
+      - name: Package Windows build
+        id: package
+        shell: pwsh
+        run: |
+          $tag = "${{ github.ref_name }}"
+          $asset = "spotifast-passive-$tag-windows-x64.zip"
+          $dist = "dist"
+
+          New-Item -ItemType Directory -Force -Path $dist | Out-Null
+          Copy-Item "target\release\spotifast.exe" "$dist\spotifast-passive.exe"
+
+          @"
+          Spotifast Passive Mode
+          ======================
+
+          Release: $tag
+          Commit:  ${{ github.sha }}
+
+          Built automatically from the tagged Passive Mode source.
+
+          Build command:
+          cargo build --locked --release --no-default-features
+
+          Run:
+          spotifast-passive.exe
+
+          Important:
+          Close any other Spotifast instance before launching this custom build.
+          "@ | Set-Content -Encoding UTF8 "$dist\README.txt"
+
+          Compress-Archive -Path "$dist\*" -DestinationPath $asset -Force
+          "asset=$asset" >> $env:GITHUB_OUTPUT
+
+      - name: Create permanent GitHub Release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $tag = "${{ github.ref_name }}"
+          $asset = "${{ steps.package.outputs.asset }}"
+
+          gh release create $tag $asset `
+            --title "Spotifast Passive Mode $tag" `
+            --generate-notes
