@@ -1,0 +1,64 @@
+name: Build Spotifast Passive Mode (Windows)
+
+on:
+  push:
+    branches:
+      - passive-mode
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout passive-mode branch
+        uses: actions/checkout@v6
+
+      - name: Install Rust 1.98.0
+        shell: pwsh
+        run: |
+          rustup toolchain install 1.98.0 --profile minimal --no-self-update
+          rustup default 1.98.0
+          rustc --version
+          cargo --version
+
+      - name: Build Spotifast release
+        shell: pwsh
+        run: cargo build --locked --release --no-default-features
+
+      - name: Create portable download
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          Copy-Item target\release\spotifast.exe dist\spotifast-passive.exe
+
+          @"
+          Spotifast Passive Mode
+          =====================
+
+          Built automatically from the passive-mode branch.
+
+          This build uses:
+          cargo build --locked --release --no-default-features
+
+          Run:
+          spotifast-passive.exe
+
+          Note:
+          This custom build is separate from an officially installed Spotifast.
+          If another Spotifast instance is already running, close it before
+          launching this executable.
+          "@ | Set-Content -Encoding UTF8 dist\README.txt
+
+          Compress-Archive -Path dist\* -DestinationPath spotifast-passive-windows.zip -Force
+
+      - name: Upload Windows build
+        uses: actions/upload-artifact@v4
+        with:
+          name: spotifast-passive-windows
+          path: spotifast-passive-windows.zip
+          if-no-files-found: error
+          retention-days: 30
