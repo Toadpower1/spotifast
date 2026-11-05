@@ -878,9 +878,12 @@ pub struct PlaylistPage {
     /// A manual refresh waiting for pending writes and their snapshot to be
     /// confirmed before requesting replacement rows.
     pub refresh_after_write: bool,
-    /// Number of immediate metadata reads made while Spotify still reported
-    /// the pre-write snapshot.
+    /// Number of metadata reads made while Spotify still reported the
+    /// pre-write snapshot.
     pub snapshot_rechecks: u8,
+    /// When to read the metadata again while Spotify still reports the
+    /// pre-write snapshot.
+    pub snapshot_recheck_at: Option<Instant>,
 }
 
 /// A contiguous playlist prefix on disk, valid for exactly one snapshot.
@@ -917,12 +920,18 @@ pub enum DiscographyFilter {
     All,
     Albums,
     Singles,
+    Compilations,
     AppearsOn,
 }
 
 impl DiscographyFilter {
-    pub const ALL: [DiscographyFilter; 4] =
-        [Self::All, Self::Albums, Self::Singles, Self::AppearsOn];
+    pub const ALL: [DiscographyFilter; 5] = [
+        Self::All,
+        Self::Albums,
+        Self::Singles,
+        Self::Compilations,
+        Self::AppearsOn,
+    ];
 
     pub fn label(self, locale: crate::i18n::Locale) -> std::borrow::Cow<'static, str> {
         use crate::i18n::{gettext, pgettext};
@@ -930,6 +939,7 @@ impl DiscographyFilter {
             Self::All => pgettext(locale, "filter", "All"),
             Self::Albums => gettext(locale, "Albums"),
             Self::Singles => gettext(locale, "Singles & EPs"),
+            Self::Compilations => gettext(locale, "Compilations"),
             Self::AppearsOn => gettext(locale, "Appears On"),
         }
     }
@@ -939,6 +949,7 @@ impl DiscographyFilter {
             Self::All => "album,single,compilation",
             Self::Albums => "album",
             Self::Singles => "single",
+            Self::Compilations => "compilation",
             Self::AppearsOn => "appears_on",
         }
     }
@@ -948,6 +959,10 @@ impl DiscographyFilter {
 pub struct ArtistPage {
     pub artist: Loadable<Artist>,
     pub top_tracks: Loadable<Vec<Track>>,
+    /// The pending or failed read can be retried once the session is ready.
+    pub top_tracks_without_session: bool,
+    /// Identity of the current request, allocated outside the page.
+    pub top_tracks_generation: u64,
     pub albums: HashMap<String, PagedList<Album>>,
     pub related: Loadable<Vec<Artist>>,
     pub filter: DiscographyFilter,
@@ -989,6 +1004,8 @@ pub enum SortColumn {
     Added,
     Duration,
     AddedBy,
+    /// Spotify's play count, where the list shows one.
+    Plays,
     /// The list's own order, for playing it reversed from the # heading.
     Index,
 }
@@ -1282,6 +1299,8 @@ pub enum Action {
     },
     RefreshQueue,
     CopyLink(String),
+    /// Copy plain text, such as a song title or its artists.
+    CopyText(String),
     /// Copy picked songs' links, one per line, and remember the songs so a
     /// paste of the same links can show their rows at once.
     CopySongs(Vec<PlayableItem>),
@@ -1292,6 +1311,8 @@ pub enum Action {
     },
     /// Open a web page in the browser.
     OpenUrl(String),
+    /// Read page metadata after drawing, with the existing per-URI retry guard.
+    RequestPlayCounts(String),
     SetPrereleaseSaved {
         uri: String,
         saved: bool,
@@ -1373,6 +1394,13 @@ pub enum Action {
         /// A drag outside the pin block selects this local playlist order.
         playlist_order: Option<Vec<String>>,
     },
+    SetSoloist(bool),
+    RetrySoloist,
+    StartSoloistSetup,
+    EnableSoloist,
+    LeaveSoloistSetup,
+    FinishSoloistSetup,
+    UseBuiltInPlayer,
     RestartEngine,
     /// Rebuild the HTTP client with the proxy in settings. Local playback
     /// restarts only when its HTTP proxy changed.
@@ -1382,10 +1410,17 @@ pub enum Action {
     ShowWindow,
     HideWindow,
     ClearArtCache,
+    ClearAudioCache,
     /// Clear local play history.
     ClearPlayHistory,
     /// Open or close the Winamp window.
     ToggleWinampWindow,
+    /// The pointer or a key on a view of a Windows Media Player skin.
+    WmpInput {
+        view: u32,
+        input: crate::skin::wmp::runtime::Input,
+        modifiers: crate::skin::wmp::runtime::Modifiers,
+    },
     /// Select a skin, or the built-in skin for `None`.
     SetSkin(Option<String>),
     /// Install and select a skin file.
@@ -1443,6 +1478,18 @@ pub enum Action {
     ToggleWinampShade,
     /// Open or close the MilkDrop window.
     ToggleWinampMilkdrop,
+    /// Move the MilkDrop picture in the skinned window on or back a preset.
+    MilkdropEffect(i32),
+    /// Take the skinned MilkDrop window to full screen, in the plain window.
+    MilkdropFullscreen,
+    /// MilkDrop alone in the window, from full screen lyrics.
+    EnterImmersive,
+    /// Full screen lyrics back as they were.
+    LeaveImmersive,
+    /// Puts MilkDrop behind full screen lyrics, or the cover's art back.
+    ToggleLyricsMilkdrop,
+    /// The size of the picture in the skinned MilkDrop window, in points.
+    SetMilkdropPanel(u32),
     /// How long each MilkDrop preset plays, in seconds.
     SetMilkdropSeconds(u32),
     SetMilkdropScale(u32),

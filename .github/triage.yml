@@ -66,9 +66,12 @@ instructions: |
   plans, headings, and em dashes.
 
   For Spotify capabilities, select docs/_reference/what-spotify-allows.md. For
-  Web API slowness or throttling, select docs/_guide/make-it-even-faster.md. A
-  personal Client ID provides a separate quota, not caching; it does not fix a
-  librespot session or audio-key refusal. Do not dismiss a valid caching
+  Web API slowness or throttling, select docs/_guide/make-it-even-faster.md.
+  Since 0.14.2 every person registers Spotifast and signs in with their own
+  Client ID; there is no shared one to fall back to. Users still on the old
+  shared sign-in can switch in Settings. A Client ID gives a separate quota,
+  not caching; it does not
+  fix a librespot session or audio-key refusal. Do not dismiss a valid caching
   request or repeat setup advice already tried. Local playback needs Premium.
   No alternate audio sources, DRM bypass, embedded browser, telemetry, or
   hosted Spotifast service. Use wontfix only for an exactly documented
@@ -129,13 +132,16 @@ instructions: |
   nothing new with the no-visual-change label; name it in next_step.
 
   "Spotify refused the audio key" reports: link #283 and
-  https://spotifast.rocks/troubleshooting/#audio-key. Rate limits and a slow
-  shared app: link https://spotifast.rocks/troubleshooting/#rate-limits. Do
-  not open a new investigation for either.
+  https://spotifast.rocks/troubleshooting/#audio-key. Rate limits and
+  slowness: link https://spotifast.rocks/troubleshooting/#rate-limits.
+  "redirect_uri: Not matching configuration" or other sign-in failures: link
+  https://spotifast.rocks/troubleshooting/#sign-in and #1057; on 0.14.1 or
+  older, the fix is updating to 0.14.2. Do not open a new investigation for
+  any of these.
 
   For opening Spotify links, login setup, and proxies, select
   docs/_guide/getting-started.md. Distinguish released features from support
-  documented only on main; do not imply development features are in 0.8.0.
+  documented only on main; do not imply that features only on main are in the latest release.
 
   Address the latest human update and account for checks already tried. Do not
   repeat an answered question or a completed diagnostic step. If a bot replied

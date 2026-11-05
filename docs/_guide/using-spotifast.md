@@ -132,6 +132,10 @@ another playlist moves them there.
 These keys edit the text instead while a search, filter or other text field
 has focus.
 
+To copy a song's title or artists instead of its link, right-click it and open
+**Copy details**. It offers the song title, the artists, or both as
+"Artist - Title".
+
 Clear any playlist filter or sort before placing songs between rows, so the
 visible positions match Spotify's order. A duplicate confirmation keeps the
 chosen position when you select **Add anyway**. Dragging near the top or bottom
@@ -166,6 +170,10 @@ When you start a song from a sorted playlist or Liked Songs, it appears in
 the player bar straight away while playback connects. Sorting changes the
 order you hear without rearranging the playlist saved on Spotify.
 
+Local songs show readable titles, artists, and albums, including spaces and
+accented characters. Names saved in older playlist caches are corrected
+automatically when the cache is read.
+
 Sorted and filtered views omit unavailable songs and local files from playback.
 The rows stay visible, and selecting a repeated song starts that occurrence. Filtering a playlist or Liked Songs plays only the matching songs,
 including repeated entries. Play is disabled when the view has no playable
@@ -184,6 +192,18 @@ while it plays from a playlist you can edit.
 Click the cover at the top of a playlist, album, artist, or podcast page to
 see it enlarged, at the largest size Spotify has. Click anywhere or press
 `Esc` to return to the page.
+
+## Links in playlist descriptions
+
+Links in a playlist's description stand out from the rest of it and can be
+clicked: a link to a Spotify playlist, artist or other page opens it here, and
+a web link opens in your browser.
+
+## Release dates
+
+Hover over the year at the top of an album, single or EP page to see its full release
+date, like "Oct 5, 2026". Spotify knows some releases only to the year, for 
+those, hovering will just show the year.
 
 ## Refreshing a playlist
 
@@ -211,6 +231,12 @@ sidebar is not in compact mode.
 A song picked from the search results plays on its own, and, with Autoplay on,
 Spotify continues with songs it suggests after it, as in the Spotify apps. The other results are
 not queued after it.
+
+## Opening a Spotify link
+
+Paste a link to a song, album, artist, playlist or podcast into the search box
+and press `Enter` to open it. A link to a song opens its album with the song
+selected and in view. Spotifast does not start playing it.
 
 ## Search from a launcher
 
@@ -262,9 +288,12 @@ this playlist**. On macOS, both `Delete` and `Fn+Delete` work. Text fields,
 dialogs and open menus keep Delete from acting on the list.
 
 Press and hold the player bar's volume slider to update local volume without
-moving the pointer. Remote volume is sent on release and keeps your chosen
+moving the pointer. Spotifast's own Soloist follows a drag as you go; other
+remote volume is sent on release. Both keep your chosen
 level while Spotify updates, including during rate limits. Fresh updates
-can confirm the level or show a change made on another device. If the volume
+can confirm the level or show a change made on another device. Some speakers,
+Sonos among them, report the old level for a few seconds after a change, so
+for six seconds the slider keeps your level over such a report. If the volume
 request fails, an error appears and the slider returns to the reported level.
 The seek slider previews on press and seeks on release.
 
@@ -296,6 +325,8 @@ Winamp skins do not yet have equivalent accessibility coverage.
 | `S` / `R` | Shuffle / cycle repeat |
 | `Q` | Queue panel, or the queue column in full screen |
 | `F` | Enter or leave full screen lyrics |
+| `V` | Full screen lyrics: MilkDrop or the cover's art behind the words |
+| `N` / `P` | Full screen lyrics: next or previous MilkDrop preset |
 | `Ctrl+F` or `/` | Search |
 | `Ctrl+B` | Show or hide the sidebar |
 | `Alt+←` / `Alt+→` | Back or forward |
@@ -306,7 +337,9 @@ Winamp skins do not yet have equivalent accessibility coverage.
 | `Ctrl+A` | Select every song in a playlist, album or Liked Songs |
 | `Ctrl+C` / `Ctrl+V` | Copy the selected songs' links / add copied song links to your playlist |
 | `Ctrl+X` | Copy the selected songs' links and remove the songs from your playlist |
-| `Ctrl+M` | Winamp mini player |
+| `Shift+Q` | Add the selected songs to the queue, or show the queue if none are selected |
+| `Shift+N` | Play the selected songs next, on this computer |
+| `Ctrl+M` | Mini player |
 | `Ctrl+Shift+K` | MilkDrop |
 | `Ctrl+,` | Settings |
 | `Ctrl+/` or `?` | All shortcuts |
@@ -400,9 +433,11 @@ Gear Lever work as well, from the update information inside it.
 
 Select **By You** under Playlists to show only playlists owned by your signed-in
 account, alongside Liked Songs. Followed playlists and collaborative playlists
-owned by someone else are hidden, including pinned ones. Search and the selected
-sort still apply. Matching playlists appear in a flat list, including those in
-collapsed folders. Turn By You off to restore the full list and folder view.
+owned by someone else are hidden, including pinned ones. The selected sort still
+applies. In text search and sorts that do not support folders, the playlists are shown 
+in a flat list. In sorts that do support folders, folders stay in place with only your
+playlists inside: folders left empty are hidden, counts show your playlists,
+and collapsed folders stay collapsed. Turn By You off to restore the full list.
 The choice is remembered on this computer and only affects the Playlists shelf.
 It uses the ownership information already loaded with your library and makes no
 additional Spotify requests.
@@ -416,7 +451,7 @@ dates come last.
 
 **Name** keeps your Spotify playlist folders, as Spotify does: playlists sort
 by name inside each folder, and folders sort by name among the playlists
-beside them. A search or **By You** still lists matching playlists flat.
+beside them. A search still lists matching playlists flat.
 
 **Spotify custom order** follows your playlist order and folders from Spotify.
 Set up playback on this computer to load that order. Your playlists stay
@@ -521,7 +556,7 @@ keys and the system's now-playing controls continue working while the window
 is closed.
 
 For the Winamp mini player, turn off **Show in taskbar** under
-**Settings > Winamp skins**, or **Show in taskbar** in its options menu.
+**Settings > Mini player**, or **Show in taskbar** in its options menu.
 The choice survives restarts. The mini player stays visible; the tray icon,
 **Ctrl+M**, the skin logo, and launching Spotifast again remain ways to reach
 the app. Returning to the main window always restores its taskbar button.
@@ -731,9 +766,30 @@ Album pages have a **Plays** column, and an artist's popular songs show
 how often each was played, as Spotify counts them. The counts come from
 Spotify's playback service, so they need playback on this computer to be
 set up. Without it, or when Spotify does not answer, the lists leave the
-counts out. The column needs a window wide enough for it.
+counts out. The column needs a window wide enough for it. Click the
+**Plays** heading to sort the album's songs from most to least played, again
+for least to most, and a third time to return to album order. Songs without a
+count sort last.
+
+The same answer gives an artist's monthly listeners, which the top of the
+artist page then shows first.
+
+## Discography
+
+An artist's discography can be narrowed to Albums, Singles & EPs, Compilations
+or Appears On.
 
 ## Upcoming albums
+
+Artist pages show a **Release countdown** section between Popular and Discography
+when Spotify supplies a countdown page. Select its album row to open the artwork,
+countdown, track preview and Pre-save button. The preview shows play counts when
+Spotify supplies them and the window has room for the extra column.
+Discovery needs both a ready same-account Spotify access (local playback)
+connection and a verified Web API sign-in, including when Soloist handles
+playback. Until both are ready, a fresh artist visit may show no countdown card.
+Visiting the artist never pre-saves an album. Refresh the artist
+page to check for a newly announced release; cards disappear after release time.
 
 Open a `spotify:prerelease:` URI or an `open.spotify.com/prerelease/` link
 with Spotifast to see the artwork, release countdown and track-list preview.
@@ -757,7 +813,7 @@ let apps remove a description, so clearing the field keeps the current one.
 You can replace it with other text instead.
 
 If Spotify refuses permission, sign in again and approve image uploads. If you
-use a personal Spotify app, reconnect it in Settings as well.
+use your own Client ID, authorize it again in Settings as well.
 
 ## Lyrics
 
@@ -768,14 +824,31 @@ from LRCLIB by its artist, title, album and length.
 Synced lyrics follow the playing line automatically. Scroll to pause following,
 choose **Follow** to resume it, or choose a line to jump to that part of the song.
 
-The expand button, or **F** when no text field has focus, opens lyrics in
-full screen. Press **F** or **Esc**, or choose the shrink button, to return to
-your previous window size. Full-screen lyrics
+The expand button in the lyrics panel or at the right of the player bar, or
+**F** when no text field has focus, opens lyrics in full screen. A narrow
+window has no room for the player bar's button. Press **F** or **Esc**, or
+choose the shrink button, to return to your previous window size. Full-screen lyrics
 scroll smoothly and highlight the playing line automatically. Scrolling by
 hand pauses following; choose **Follow** to resume. Since 0.11.0, a wide
 window shows the song's cover beside the lyrics, the two centred together,
 and a song without words, such as an instrumental, shows just its cover in
 the middle of the screen.
+
+Press **V** in full screen lyrics, or click anywhere that isn't a line of
+lyrics or a control, to put MilkDrop behind the words instead of the cover's
+art, and do the same again to bring the art back; Spotifast remembers which you
+chose. **N** and **P** change the preset there. The picture is dimmed as far as
+it takes to keep the words clear, and holds still while the music is paused.
+It uses the presets you have: with none, the art stays. It follows the sound
+after the equalizer and before the volume, like every visualizer.
+
+Click the album art in full screen lyrics to leave MilkDrop alone on the
+screen, edge to edge and at full brightness, even if it was off. Move the mouse
+to see the player's controls for a few seconds; the cursor hides with them.
+Any other click brings everything back as it was, and **Esc** leaves full
+screen. **V**, **N** and **P** still work. A song with no art, or a computer
+with no MilkDrop to show, stays as it is.
+
 Since 0.10.0, quitting while lyrics are full screen no longer leaves
 the next launch stuck in full screen: the window returns to its previous size.
 

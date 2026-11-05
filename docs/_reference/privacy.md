@@ -57,7 +57,10 @@ Spotifast connects only to the services below.
 - **LRCLIB.** When the lyrics panel is open and neither Spotify nor, for a
   local file, the file itself has lyrics for the song, Spotifast sends its
   artist, title, album and length to [lrclib.net](https://lrclib.net).
-  Nothing identifying you is included.
+  Nothing identifying you is included. Short overloads are retried within a
+  20-second lookup budget, respecting `Retry-After`; search can recover when
+  the exact lookup is temporarily unavailable. A failed lookup can use older
+  cached lyrics, but never caches an outage as a missing transcription.
 - **GitHub.** Once a day, Spotifast asks GitHub for the latest release. You
   can turn automatic checks off in Settings. Downloading an update, and the
   first opening of MilkDrop, also fetch files from GitHub. No Spotify data is
@@ -77,3 +80,15 @@ no analytics.
 ## Questions
 
 Ask on [GitHub](https://github.com/crmne/spotifast/issues).
+
+## Optional Spotify Soloist
+
+Enabling [Soloist](/soloist/) downloads Spotify's separate software from
+`soloist-builds.spotifycdn.com`. It makes its own Spotify connections under
+Spotify's privacy policy, including any diagnostics its binary implements.
+Spotifast's proxy does not configure those streaming connections. The personal
+key is saved in the system credential store, but Soloist requires it in the
+running process's arguments. Spotifast does not log those arguments or the
+child's output. Pairing state is stored in Spotifast's private state folder
+and removed at sign-out. Its unauthenticated local control socket is bound
+to loopback only, never to the LAN. See the setup page for details and limits.

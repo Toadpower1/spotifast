@@ -19,6 +19,7 @@ use crate::i18n::{Locale, gettext, pgettext};
 use crate::model::{Action, Page};
 use crate::player::RepeatMode;
 use crate::settings::VisMode;
+use crate::skin::generic;
 use crate::skin::layout::{self, Area};
 use crate::skin::{Mask, Sheet, Skin, Sprite, font, sprites};
 use crate::util;
@@ -28,13 +29,31 @@ use crate::winamp::{MAX_SCALE, WinampState};
 use super::widgets::{SliderEvent, wheel_notches};
 
 mod equalizer;
+#[cfg(feature = "milkdrop")]
+mod milkdrop;
 mod pixel_text;
 mod playlist;
+mod wmp;
 
 pub use pixel_text::PixelText;
 
-/// The stack's height in skin pixels: the main window, and the equalizer
-/// and the playlist under it, whichever are open.
+/// The MilkDrop panel's height in skin pixels. It is as wide as the player:
+/// the window has no background of its own to fill beside a wider panel.
+pub(crate) fn clamped_panel(height: u32) -> u32 {
+    height.clamp(generic::MIN_HEIGHT, MILKDROP_PANEL_MAX)
+}
+
+/// The tallest the panel grows, in skin pixels.
+const MILKDROP_PANEL_MAX: u32 = 960;
+
+/// The panel's height in the stack, if it is open in this build.
+fn docked_milkdrop(settings: &crate::settings::Settings) -> Option<u32> {
+    (cfg!(feature = "milkdrop") && settings.milkdrop_open)
+        .then(|| clamped_panel(settings.milkdrop_panel_height))
+}
+
+/// The stack's height in skin pixels: the main window, and the equalizer,
+/// the playlist and MilkDrop under it, whichever are open.
 fn stack_height(settings: &crate::settings::Settings) -> u32 {
     let mut height = if settings.winamp_shaded {
         layout::SHADE_HEIGHT
@@ -57,6 +76,9 @@ fn stack_height(settings: &crate::settings::Settings) -> u32 {
                 .clamp(layout::PLAYLIST_MIN_HEIGHT, layout::PLAYLIST_MAX_HEIGHT)
         };
     }
+    if let Some(panel) = docked_milkdrop(settings) {
+        height += panel;
+    }
     height
 }
 
@@ -68,8 +90,12 @@ pub fn window_size(settings: &crate::settings::Settings, unit: f32) -> Vec2 {
 
 /// A first guess at the window's size, before the display's scale is
 /// known; the first frame corrects it.
-pub fn initial_size(settings: &crate::settings::Settings) -> Vec2 {
-    window_size(settings, WinampState::scale(settings, 1.0) as f32)
+pub fn initial_size(settings: &crate::settings::Settings, skin: &Skin) -> Vec2 {
+    let unit = WinampState::scale(settings, 1.0, skin) as f32;
+    match &skin.wmp {
+        Some(wmp) => vec2(wmp.width as f32, wmp.height as f32) * unit,
+        None => window_size(settings, unit),
+    }
 }
 
 /// Skin files dropped on the window this frame.
@@ -88,26 +114,26 @@ pub fn dropped_skins(ctx: &egui::Context) -> Vec<PathBuf> {
 /// Logical points per skin pixel: a whole number of screen pixels.
 fn unit(app: &App, ctx: &egui::Context) -> f32 {
     let pixels_per_point = ctx.pixels_per_point();
-    WinampState::scale(&app.settings, pixels_per_point) as f32 / pixels_per_point
+    WinampState::scale(&app.settings, pixels_per_point, &app.winamp.skin) as f32 / pixels_per_point
 }
 
 /// Fits the window to the skin after the display scale is known.
-fn fit_window(ctx: &egui::Context, settings: &crate::settings::Settings, unit: f32) {
-    let wanted = window_size(settings, unit);
+fn fit_window(ctx: &egui::Context, wanted: Vec2) {
     // Not `inner_rect`: Wayland reports no window positions, so that is
     // `None` there; the screen rect is the window's size on every desktop.
     let current = ctx.viewport_rect().size();
     if (current - wanted).abs().max_elem() < 1.0 {
         return;
     }
-    // Retry rejected resize requests at most once per second.
+    // Retry a rejected size at most once per second; a new one goes at once,
+    // or a corner being dragged would move in steps of a second.
     let asked = Id::new("winamp-fit-asked");
-    let last: Option<f64> = ctx.data(|data| data.get_temp(asked));
+    let last: Option<(f64, Vec2)> = ctx.data(|data| data.get_temp(asked));
     let now = ctx.input(|input| input.time);
-    if last.is_some_and(|last| now - last < 1.0) {
+    if last.is_some_and(|(last, size)| size == wanted && now - last < 1.0) {
         return;
     }
-    ctx.data_mut(|data| data.insert_temp(asked, now));
+    ctx.data_mut(|data| data.insert_temp(asked, (now, wanted)));
     ctx.send_viewport_cmd(ViewportCommand::MinInnerSize(wanted));
     ctx.send_viewport_cmd(ViewportCommand::MaxInnerSize(wanted));
     ctx.send_viewport_cmd(ViewportCommand::InnerSize(wanted));
@@ -324,8 +350,12 @@ impl View<'_> {
 /// The whole window, drawn into the root.
 pub fn show(app: &mut App, ui: &mut Ui) {
     let ctx = ui.ctx().clone();
+    if app.winamp.skin.wmp.is_some() {
+        wmp::show(app, ui);
+        return;
+    }
     let unit = unit(app, &ctx);
-    fit_window(&ctx, &app.settings, unit);
+    fit_window(&ctx, window_size(&app.settings, unit));
     let origin = ui.max_rect().min;
     let focused = ctx.input(|input| input.viewport().focused.unwrap_or(true));
     super::keys::handle(app, &ctx);
@@ -394,7 +424,30 @@ pub fn show(app: &mut App, ui: &mut Ui) {
             mask: None,
         };
         playlist::show(app, &mut below, now.as_ref(), focused);
+        below_y += if app.settings.playlist_shaded {
+            layout::PLAYLIST_SHADE_HEIGHT
+        } else {
+            app.settings
+                .playlist_height
+                .clamp(layout::PLAYLIST_MIN_HEIGHT, layout::PLAYLIST_MAX_HEIGHT)
+        };
     }
+    #[cfg(feature = "milkdrop")]
+    if app.milkdrop_framed() {
+        let mut below = View {
+            ui: view.ui,
+            origin: origin + vec2(0.0, below_y as f32 * unit),
+            unit,
+            skin: &skin,
+            textures: &textures,
+            mask: None,
+        };
+        if milkdrop::show(app, &mut below, focused) {
+            crate::theme::visualiser_frame(&ctx, Some(app.milkdrop_pane_fps()));
+        }
+    }
+    #[cfg(not(feature = "milkdrop"))]
+    let _ = below_y;
 
     if vis_moving {
         crate::theme::visualiser_frame(&ctx, app.visualiser_fps());
@@ -706,7 +759,7 @@ fn options_menu(app: &mut App, ui: &mut Ui, unit: f32) {
     let locale = app.locale;
     let font = menu_font(unit);
     ui.set_min_width(font * 11.0);
-    let scale = WinampState::scale(&app.settings, ui.ctx().pixels_per_point());
+    let scale = WinampState::scale(&app.settings, ui.ctx().pixels_per_point(), &app.winamp.skin);
     ui.horizontal(|ui| {
         ui.label(gettext(locale, "Size").as_ref());
         for candidate in 1..=MAX_SCALE {
@@ -898,7 +951,11 @@ fn clutter_bar(app: &mut App, view: &mut View, now: Option<&NowPlaying>) {
     }
     // D goes round every size, 1x to 4x: 1x is the skin pixel for pixel
     // on a display without scaling.
-    let scale = WinampState::scale(&app.settings, view.ui.ctx().pixels_per_point());
+    let scale = WinampState::scale(
+        &app.settings,
+        view.ui.ctx().pixels_per_point(),
+        &app.winamp.skin,
+    );
     if view
         .lamp_button(
             layout::CLUTTER_D,
@@ -974,11 +1031,13 @@ fn visualiser(app: &mut App, view: &mut View, now: Option<&NowPlaying>, area: Ar
         }
     }
     let row_at = |row: u8| u32::from(row) * area.height / u32::from(vis::ROWS);
-    let sounding = now.is_some_and(|now| (now.playing || now.loading) && now.local);
+    let sounding = app.visualizer_sounding(now);
     match mode {
         VisMode::Bars => {
             let samples = if sounding {
-                app.winamp.tap.window(vis::FFT_SAMPLES, vis::LAG)
+                app.winamp
+                    .tap
+                    .window(vis::FFT_SAMPLES, app.visualizer_lag())
             } else {
                 vec![0.0; vis::FFT_SAMPLES]
             };
@@ -1004,7 +1063,9 @@ fn visualiser(app: &mut App, view: &mut View, now: Option<&NowPlaying>, area: Ar
         }
         VisMode::Scope => {
             let samples = if sounding {
-                app.winamp.tap.window(vis::SCOPE_SAMPLES, vis::LAG)
+                app.winamp
+                    .tap
+                    .window(vis::SCOPE_SAMPLES, app.visualizer_lag())
             } else {
                 vec![0.0; vis::SCOPE_SAMPLES]
             };
@@ -1341,10 +1402,8 @@ fn sliders(app: &mut App, view: &mut View, now: Option<&NowPlaying>) {
     match event {
         SliderEvent::Dragging(value) => {
             app.volume_preview = Some(value);
-            if now.is_none_or(|now| now.local) {
-                app.actions
-                    .push(Action::PreviewVolume((value * 100.0).round() as u8));
-            }
+            app.actions
+                .push(Action::PreviewVolume((value * 100.0).round() as u8));
         }
         SliderEvent::Committed(value) => {
             app.volume_preview = None;
@@ -1678,15 +1737,47 @@ mod tests {
 
     #[test]
     fn the_first_size_is_a_whole_multiple_of_the_skin() {
+        let skin = Skin::builtin();
         let mut settings = crate::settings::Settings::default();
-        assert_eq!(initial_size(&settings), vec2(550.0, 232.0));
+        assert_eq!(initial_size(&settings, &skin), vec2(550.0, 232.0));
         settings.skin_scale = Some(1);
-        assert_eq!(initial_size(&settings), vec2(275.0, 116.0));
+        assert_eq!(initial_size(&settings, &skin), vec2(275.0, 116.0));
         settings.playlist_open = true;
-        assert_eq!(initial_size(&settings), vec2(275.0, 290.0));
+        assert_eq!(initial_size(&settings, &skin), vec2(275.0, 290.0));
         settings.eq_open = true;
-        assert_eq!(initial_size(&settings), vec2(275.0, 406.0));
+        assert_eq!(initial_size(&settings, &skin), vec2(275.0, 406.0));
         settings.eq_shaded = true;
-        assert_eq!(initial_size(&settings), vec2(275.0, 304.0));
+        assert_eq!(initial_size(&settings, &skin), vec2(275.0, 304.0));
+    }
+
+    /// MilkDrop docks under everything else, the window grows to fit, and
+    /// the double size scales the lot.
+    #[cfg(feature = "milkdrop")]
+    #[test]
+    fn the_milkdrop_panel_stacks_under_the_rest_and_grows_the_window() {
+        let mut settings = crate::settings::Settings {
+            eq_open: true,
+            playlist_open: true,
+            ..Default::default()
+        };
+        let without = window_size(&settings, 1.0);
+        settings.milkdrop_open = true;
+        settings.milkdrop_panel_height = 232;
+        assert_eq!(
+            window_size(&settings, 1.0),
+            without + vec2(0.0, 232.0),
+            "the main window's width, and taller"
+        );
+        assert_eq!(
+            window_size(&settings, 2.0),
+            window_size(&settings, 1.0) * 2.0
+        );
+    }
+
+    /// A file edited by hand cannot make the frame fall apart.
+    #[test]
+    fn the_milkdrop_panel_keeps_to_its_limits() {
+        assert_eq!(clamped_panel(0), generic::MIN_HEIGHT);
+        assert_eq!(clamped_panel(9999), MILKDROP_PANEL_MAX);
     }
 }

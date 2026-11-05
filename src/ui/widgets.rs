@@ -327,6 +327,11 @@ pub fn paint_shadow(ui: &Ui, palette: &Palette, rect: Rect, radius: f32) {
 
 /// Fills `rect` with a vertical gradient from `top` to `bottom`.
 pub fn paint_vertical_gradient(ui: &Ui, rect: Rect, top: Color32, bottom: Color32) {
+    ui.painter().add(vertical_gradient(rect, top, bottom));
+}
+
+/// A gradient shape whose bounds can be set after laying out its content.
+pub fn vertical_gradient(rect: Rect, top: Color32, bottom: Color32) -> egui::Shape {
     let mut mesh = egui::Mesh::default();
     mesh.colored_vertex(rect.left_top(), top);
     mesh.colored_vertex(rect.right_top(), top);
@@ -334,7 +339,7 @@ pub fn paint_vertical_gradient(ui: &Ui, rect: Rect, top: Color32, bottom: Color3
     mesh.colored_vertex(rect.left_bottom(), bottom);
     mesh.add_triangle(0, 1, 2);
     mesh.add_triangle(0, 2, 3);
-    ui.painter().add(egui::Shape::mesh(mesh));
+    egui::Shape::mesh(mesh)
 }
 
 /// Lays out only the rows that intersect the visible area of the enclosing
@@ -1186,6 +1191,41 @@ fn item_menu_at(
         &gettext(locale, "Copy link"),
     ) {
         app.actions.push(Action::CopyLink(uri.clone()));
+    }
+    if let PlayableItem::Track(track) = item {
+        let artists = track.artist_names();
+        let has_title = !track.name.is_empty();
+        let has_artists = !artists.is_empty();
+        if has_title || has_artists {
+            menu_submenu(
+                ui,
+                &palette,
+                Some(Icon::Copy),
+                &gettext(locale, "Copy details"),
+                |ui| {
+                    ui.set_min_width(200.0);
+                    ui.set_max_width(300.0);
+                    if has_title && menu_item(ui, &palette, None, &gettext(locale, "Song title")) {
+                        app.actions.push(Action::CopyText(track.name.clone()));
+                    }
+                    if has_artists && menu_item(ui, &palette, None, &gettext(locale, "Artist")) {
+                        app.actions.push(Action::CopyText(artists.clone()));
+                    }
+                    if has_title
+                        && has_artists
+                        && menu_item(
+                            ui,
+                            &palette,
+                            None,
+                            &gettext(locale, "Artist and song title"),
+                        )
+                    {
+                        app.actions
+                            .push(Action::CopyText(format!("{artists} - {}", track.name)));
+                    }
+                },
+            );
+        }
     }
     if menu_item(
         ui,
@@ -2460,14 +2500,12 @@ pub fn table_header(
         );
         cx += added_width;
     }
-    // Spotify's own lists do not sort by plays, and neither does this one.
     if plays_width > 0.0 {
-        ui.painter().text(
-            pos2(cx, rect.center().y),
-            egui::Align2::LEFT_CENTER,
-            pgettext(locale, "column heading", "PLAYS"),
-            font.clone(),
-            color,
+        heading(
+            ui,
+            cx,
+            &pgettext(locale, "column heading", "PLAYS"),
+            SortColumn::Plays,
         );
     }
     if number_clicked {
@@ -2851,9 +2889,43 @@ pub fn skeleton_rows(ui: &mut Ui, palette: &Palette, locale: Locale, count: usiz
 /// Placeholder cards for a shelf that is loading, the size of the cards it
 /// will show, round for artists. Like [`skeleton_rows`], they do not move.
 pub fn skeleton_cards(ui: &mut Ui, palette: &Palette, locale: Locale, count: usize, round: bool) {
-    let fill = skeleton_fill(palette);
     const PAD: f32 = 12.0;
     let height = PAD + CARD_ART + 10.0 + 14.0 + 6.0 + 10.0 + PAD;
+    skeleton_cards_sized(ui, palette, locale, count, round, height);
+}
+
+/// Fills a previous card grid's height with placeholders. Each row uses at
+/// least the loaded card height, including its two subtitle lines, and shares
+/// any extra room (such as the old Load more button) across the rows.
+pub fn skeleton_cards_filling(
+    ui: &mut Ui,
+    palette: &Palette,
+    locale: Locale,
+    count: usize,
+    round: bool,
+    min_height: f32,
+) {
+    let spacing = CARD_GAP / 2.0;
+    let columns = ((ui.available_width() + spacing) / (CARD_WIDTH + spacing))
+        .floor()
+        .max(1.0) as usize;
+    let rows = count.max(1).div_ceil(columns);
+    let height = ((min_height - CARD_GAP * rows.saturating_sub(1) as f32) / rows as f32)
+        .max(card_row_height(ui));
+    skeleton_cards_sized(ui, palette, locale, count, round, height);
+}
+
+/// Draws skeleton covers and text at an explicitly chosen row height.
+fn skeleton_cards_sized(
+    ui: &mut Ui,
+    palette: &Palette,
+    locale: Locale,
+    count: usize,
+    round: bool,
+    height: f32,
+) {
+    let fill = skeleton_fill(palette);
+    const PAD: f32 = 12.0;
     for index in 0..count {
         let (rect, response) = ui.allocate_exact_size(vec2(CARD_WIDTH, height), Sense::hover());
         if index == 0 {
@@ -3118,6 +3190,29 @@ pub fn chips<T: PartialEq + Copy>(
     current: T,
 ) -> Option<T> {
     let mut selected = None;
+    let id = ui.next_auto_id();
+    chip_row(ui, id, palette.window, |ui| {
+        ui.spacing_mut().item_spacing.x = 8.0;
+        for (value, label) in options {
+            let chip = theme::soft_button(ui, palette, None, label, *value == current);
+            if chip.clicked() {
+                chip.scroll_to_me(None);
+                selected = Some(*value);
+            }
+        }
+    });
+    selected
+}
+
+/// Chips for a list of any length, such as installed skins: they wrap onto as
+/// many rows as they need, so every choice is in sight.
+pub fn wrapped_chips<T: PartialEq + Copy>(
+    ui: &mut Ui,
+    palette: &Palette,
+    options: &[(T, &str)],
+    current: T,
+) -> Option<T> {
+    let mut selected = None;
     ui.horizontal_wrapped(|ui| {
         ui.spacing_mut().item_spacing.x = 8.0;
         for (value, label) in options {
@@ -3127,6 +3222,47 @@ pub fn chips<T: PartialEq + Copy>(
         }
     });
     selected
+}
+
+/// How wide the fade over a chip row's clipped edge is.
+const CHIP_FADE: f32 = 24.0;
+
+/// One row of chips that scrolls when it overflows. It draws no scroll bar,
+/// which has no room of its own and would lie over the chips: the clipped
+/// chip and a fade into `fill` say there is more. A plain mouse wheel scrolls
+/// the row, since most mice have no sideways wheel.
+pub fn chip_row(
+    ui: &mut Ui,
+    id: egui::Id,
+    fill: egui::Color32,
+    add_contents: impl FnOnce(&mut Ui),
+) {
+    let row = ui
+        .scope(|ui| {
+            ui.style_mut().always_scroll_the_only_direction = true;
+            egui::ScrollArea::horizontal()
+                .id_salt(id)
+                .animated(false)
+                .auto_shrink([false, true])
+                .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden)
+                .show(ui, |ui| {
+                    ui.horizontal(add_contents);
+                })
+        })
+        .inner;
+    let rect = row.inner_rect;
+    let hidden = row.content_size.x - row.state.offset.x - rect.width();
+    if hidden > 0.5 {
+        let fade = Rect::from_min_max(pos2(rect.right() - CHIP_FADE, rect.top()), rect.max);
+        let mut mesh = egui::Mesh::default();
+        mesh.colored_vertex(fade.left_top(), egui::Color32::TRANSPARENT);
+        mesh.colored_vertex(fade.right_top(), fill);
+        mesh.colored_vertex(fade.right_bottom(), fill);
+        mesh.colored_vertex(fade.left_bottom(), egui::Color32::TRANSPARENT);
+        mesh.add_triangle(0, 1, 2);
+        mesh.add_triangle(0, 2, 3);
+        ui.painter().add(egui::Shape::mesh(mesh));
+    }
 }
 
 /// A text input with the native clipboard actions and a selection-aware menu.
@@ -3371,6 +3507,21 @@ pub fn setting_row(
     control: impl FnOnce(&mut Ui),
 ) {
     setting_row_sized(ui, palette, label, description, 0.0, control);
+}
+
+/// A settings row that only says something: with nothing to lay out beside
+/// or under the text, a narrow window leaves no gap where a control would go.
+pub fn setting_note(ui: &mut Ui, palette: &Palette, label: &str, description: &str) {
+    theme::text(ui, label, theme::medium(14.0), palette.text);
+    ui.add(
+        egui::Label::new(
+            egui::RichText::new(description)
+                .font(theme::regular(12.5))
+                .color(palette.secondary),
+        )
+        .wrap(),
+    );
+    ui.add_space(10.0);
 }
 
 /// A settings row whose control needs `control_width` points, such as a

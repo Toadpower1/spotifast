@@ -421,6 +421,11 @@ pub fn popup(app: &mut App, ctx: &egui::Context) {
                 });
                 ui.add_space(4.0);
                 let local_id = app.local_device_id.clone();
+                let soloist_id = app.soloist_device_id.clone();
+                // Offer one local destination once the managed player is
+                // ready. Keep an actually playing built-in engine visible;
+                // switching Soloist off in Settings restores its idle row.
+                let hide_builtin = soloist_id.is_some() && !app.local.is_active();
                 let mut devices: Vec<Device> = app.devices.clone();
                 if app.local_ready
                     && let Some(local_id) = &local_id
@@ -479,6 +484,11 @@ pub fn popup(app: &mut App, ctx: &egui::Context) {
                     .map(OutputRow::Device)
                     .chain(waiting.into_iter().map(OutputRow::Receiver))
                     .collect();
+                if hide_builtin {
+                    rows.retain(|row| {
+                        row.identity().is_none_or(|id| Some(id) != local_id.as_deref())
+                    });
+                }
                 rank_outputs(
                     &mut rows,
                     &app.device_history,
@@ -497,7 +507,7 @@ pub fn popup(app: &mut App, ctx: &egui::Context) {
                         .max_height(max_height),
                     egui::Vec2b::new(false, true),
                     |ui| {
-                        if !app.local_ready {
+                        if !app.local_ready && soloist_id.is_none() {
                             enable_playback_row(app, ui);
                         }
                         if rows.is_empty() && app.local_ready {
@@ -522,8 +532,11 @@ pub fn popup(app: &mut App, ctx: &egui::Context) {
                                     return;
                                 };
                                 let is_local = device.id.is_some() && device.id == local_id;
+                                let is_soloist = device.id.is_some() && device.id == soloist_id;
                                 let active = device.id.is_some() && device.id == active_id;
-                                let name = if is_local {
+                                let name = if is_soloist {
+                                    gettext(locale, "This computer").into_owned()
+                                } else if is_local {
                                     // Translators: {name} is the name this computer uses in Spotify Connect.
                                     gettext(locale, "{name} (this computer)")
                                         .replace("{name}", &device.name)
@@ -534,6 +547,9 @@ pub fn popup(app: &mut App, ctx: &egui::Context) {
                                     vec2(ui.available_width(), 52.0),
                                     Sense::click(),
                                 );
+                                response.widget_info(|| {
+                                    egui::WidgetInfo::labeled(egui::WidgetType::Button, true, &name)
+                                });
                                 if response.hovered() {
                                     ui.painter().rect_filled(
                                         rect,
@@ -541,12 +557,12 @@ pub fn popup(app: &mut App, ctx: &egui::Context) {
                                         palette.surface_hover,
                                     );
                                 }
-                                let color = if active { palette.accent } else { palette.text };
+                                let color = if active && !is_soloist { palette.accent } else { palette.text };
                                 let icon_rect = Rect::from_center_size(
                                     pos2(rect.left() + 24.0, rect.center().y),
                                     egui::Vec2::splat(22.0),
                                 );
-                                device_icon(&device.kind)
+                                (if is_soloist { Icon::Laptop } else { device_icon(&device.kind) })
                                     .image(color, 22.0)
                                     .paint_at(ui, icon_rect);
                                 let painter = ui.painter().with_clip_rect(rect);
@@ -559,7 +575,9 @@ pub fn popup(app: &mut App, ctx: &egui::Context) {
                                     theme::medium(14.0),
                                     color,
                                 );
-                                let status = if active {
+                                let status = if is_soloist {
+                                    "Soloist".to_owned()
+                                } else if active {
                                     gettext(locale, "Listening on this device").into_owned()
                                 } else if device.is_restricted {
                                     gettext(locale, "Restricted").into_owned()
@@ -573,7 +591,7 @@ pub fn popup(app: &mut App, ctx: &egui::Context) {
                                     egui::Align2::LEFT_CENTER,
                                     status,
                                     theme::regular(12.0),
-                                    if active {
+                                    if active && !is_soloist {
                                         palette.accent
                                     } else {
                                         palette.secondary
@@ -581,7 +599,12 @@ pub fn popup(app: &mut App, ctx: &egui::Context) {
                                 );
                                 if active {
                                     let dot = pos2(rect.right() - 16.0, rect.center().y);
-                                    ui.painter().circle_filled(dot, 4.0, palette.accent);
+                                    if is_soloist {
+                                        Icon::Check.image(palette.secondary, 16.0).paint_at(ui,
+                                            Rect::from_center_size(dot, egui::Vec2::splat(16.0)));
+                                    } else {
+                                        ui.painter().circle_filled(dot, 4.0, palette.accent);
+                                    }
                                 }
                                 if response.clicked()
                                     && !active
@@ -593,7 +616,7 @@ pub fn popup(app: &mut App, ctx: &egui::Context) {
                         }
                     },
                 );
-                if app.local_ready {
+                if app.local_ready && !hide_builtin {
                     output_picker(app, ui);
                 }
             });

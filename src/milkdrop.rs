@@ -5,6 +5,11 @@
 //! one event loop per process and eframe owns the main one. Audio reaches the
 //! child through a shared-memory ring.
 //!
+//! The same child can draw without a window of its own and publish frames to
+//! shared memory ([`frames`]), for the app to show inside a skin ([`pane`]).
+//! projectM stays out of the app's process either way: on egui's thread it
+//! would freeze the interface.
+//!
 //! [`Presets`] lists the config directory's `milkdrop` folder and downloads
 //! optional projectM preset packs. No presets are bundled.
 
@@ -17,11 +22,20 @@ use std::time::{Duration, Instant};
 pub mod child;
 #[cfg(feature = "milkdrop")]
 pub mod engine;
+/// Finished frames in shared memory, from the child to a skin's pane.
+#[cfg(feature = "milkdrop")]
+pub mod frames;
 /// The app's side of the child process: spawning it and talking to it.
 #[cfg(feature = "milkdrop")]
 pub mod host;
+/// The child's mode with no window, drawing frames for a pane.
+#[cfg(feature = "milkdrop")]
+mod offscreen;
 /// Fading text over the picture: the keys, the playing song.
 pub mod overlay;
+/// The app's side of a pane's picture: the stream of frames and its child.
+#[cfg(feature = "milkdrop")]
+pub mod pane;
 /// The shared-memory audio ring between the app and the MilkDrop child.
 #[cfg(feature = "milkdrop")]
 pub mod shm;
@@ -134,6 +148,8 @@ pub struct Presets {
     /// Random order when true; folder order when false.
     random: bool,
     pending: Option<Request>,
+    /// When the playing preset was asked for, which its time counts from.
+    started: Instant,
     download: Option<(&'static str, mpsc::Receiver<Result<usize, String>>)>,
 }
 
@@ -154,6 +170,7 @@ impl Presets {
             locked: false,
             random: true,
             pending: None,
+            started: Instant::now(),
             download: None,
         }
     }
@@ -220,6 +237,23 @@ impl Presets {
         self.request(!hard);
     }
 
+    /// Fades to the next preset once this one has had `seconds`, unless it
+    /// is being kept.
+    ///
+    /// The time is counted here rather than left to projectM, which fixes a
+    /// preset's length when the preset starts, so a new Time per preset
+    /// would wait for the next one, and which never asks again after a
+    /// preset fails to load (#1120). A preset that fails leaves the one
+    /// playing on for another turn.
+    pub fn advance(&mut self, now: Instant, seconds: u32) {
+        // A fade cut short jumps to its end.
+        let fade = Duration::from_secs_f64(CROSSFADE_SECONDS);
+        let turn = Duration::from_secs(seconds.into()).max(fade);
+        if !self.locked && now.saturating_duration_since(self.started) >= turn {
+            self.next(false);
+        }
+    }
+
     /// Back to the preset before this one.
     pub fn previous(&mut self) {
         if self.at == 0 {
@@ -262,6 +296,7 @@ impl Presets {
                 path: path.to_path_buf(),
                 smooth,
             });
+            self.started = Instant::now();
         }
     }
 
@@ -389,6 +424,17 @@ fn walk(folder: &Path, depth: usize, files: &mut Vec<PathBuf>) {
     }
 }
 
+/// The program to start MilkDrop's child from. An update that replaces the
+/// running file leaves `current_exe` naming nothing, but Linux keeps the
+/// running file reachable through `/proc`.
+pub(crate) fn this_program() -> std::io::Result<std::path::PathBuf> {
+    let own = Path::new("/proc/self/exe");
+    if cfg!(target_os = "linux") && own.exists() {
+        return Ok(own.to_path_buf());
+    }
+    std::env::current_exe()
+}
+
 /// Whether the folder holds a preset, looking no further than the first:
 /// cheap enough for the UI thread, where a full listing is not.
 pub fn has_presets(folder: &Path) -> bool {
@@ -475,6 +521,79 @@ pub fn unpack_presets(zip: &[u8], folder: &Path) -> Result<usize, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Presets that have just started the first of `files`.
+    fn playing(files: &[&str]) -> Presets {
+        let mut presets = Presets::new();
+        presets.files = files.iter().map(PathBuf::from).collect();
+        presets.random = false;
+        presets.next(false);
+        presets.take_request();
+        presets
+    }
+
+    fn asked_for(presets: &mut Presets) -> Option<(PathBuf, bool)> {
+        presets.take_request().map(|request| match request {
+            Request::Load { path, smooth } => (path, smooth),
+        })
+    }
+
+    /// #1120: a preset lasts the time asked for, then fades to the next.
+    #[test]
+    fn a_preset_ends_when_its_time_is_up() {
+        let mut presets = playing(&["a.milk", "b.milk"]);
+        let start = presets.started;
+        presets.advance(start + Duration::from_millis(9_999), 10);
+        assert_eq!(asked_for(&mut presets), None);
+        presets.advance(start + Duration::from_secs(10), 10);
+        assert_eq!(
+            asked_for(&mut presets),
+            Some((PathBuf::from("b.milk"), true))
+        );
+    }
+
+    /// #1120: a new time reaches the preset already playing, where projectM
+    /// would keep the length that preset started with.
+    #[test]
+    fn a_new_time_applies_to_the_playing_preset() {
+        let mut presets = playing(&["a.milk", "b.milk"]);
+        let now = presets.started + Duration::from_secs(20);
+        presets.advance(now, 300);
+        assert_eq!(asked_for(&mut presets), None);
+        presets.advance(now, 5);
+        assert!(asked_for(&mut presets).is_some());
+    }
+
+    /// #1120: turns keep coming with nothing said about the last load, so
+    /// one that failed cannot stop them, as it stops projectM's own timer.
+    #[test]
+    fn a_failed_load_does_not_stop_the_turns() {
+        let mut presets = playing(&["a.milk", "b.milk"]);
+        for _ in 0..3 {
+            let start = presets.started;
+            presets.advance(start + Duration::from_secs(10), 10);
+            assert!(asked_for(&mut presets).is_some());
+        }
+    }
+
+    #[test]
+    fn a_kept_preset_stays() {
+        let mut presets = playing(&["a.milk", "b.milk"]);
+        presets.locked = true;
+        presets.advance(presets.started + Duration::from_secs(3600), 10);
+        assert_eq!(asked_for(&mut presets), None);
+    }
+
+    /// The shortest time is shorter than the fade: the fade finishes first.
+    #[test]
+    fn a_fade_is_never_cut_short() {
+        let mut presets = playing(&["a.milk", "b.milk"]);
+        let start = presets.started;
+        presets.advance(start + Duration::from_secs(2), 2);
+        assert_eq!(asked_for(&mut presets), None);
+        presets.advance(start + Duration::from_secs_f64(CROSSFADE_SECONDS), 2);
+        assert!(asked_for(&mut presets).is_some());
+    }
 
     fn temp_dir(name: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!("spotifast-{name}-{}", std::process::id()));

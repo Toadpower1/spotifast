@@ -12,6 +12,8 @@ depends=('dbus' 'alsa-lib' 'libpipewire' 'libglvnd' 'libxkbcommon' 'wayland' 'li
 # that build, and clang carries the libclang bindgen reads its headers
 # with. Build with --no-default-features to leave the visualiser out.
 makedepends=('git' 'cargo' 'cmake' 'clang')
+# The test suite uses ps where it cannot read a process any other way.
+checkdepends=('procps-ng')
 optdepends=('libxkbcommon-x11: keyboard handling in X11 sessions'
             'pipewire-pulse: PipeWire as the PulseAudio server')
 provides=("spotifast=$pkgver")
@@ -36,6 +38,18 @@ pkgver() {
 prepare() {
   cd "${srcdir}/${pkgname}"
   export RUSTUP_TOOLCHAIN=stable
+  # Cargo.toml's rust-version is the oldest compiler that builds Spotifast.
+  # Check it before fetching, so an older stable fails at once and says how
+  # to update, rather than after every crate has downloaded.
+  local need have
+  need=$(sed -n 's/^rust-version = "\(.*\)"$/\1/p' Cargo.toml)
+  have=$(rustc --version 2>/dev/null | cut -d' ' -f2)
+  if [[ -n "${need}" && -n "${have}" && "$(vercmp "${have}" "${need}")" -lt 0 ]]; then
+    error "Spotifast needs Rust ${need} or newer, but rustc is ${have}."
+    plain "With rustup, run: rustup update stable"
+    plain "With Arch's rust package, update the system: pacman -Syu"
+    return 1
+  fi
   cargo fetch --locked --target "$(rustc -vV | sed -n 's/host: //p')"
 }
 
@@ -51,6 +65,8 @@ build() {
 }
 
 check() {
+  # The tests open many files at once; a lower hard limit is left as it is.
+  ulimit -n 4096 2>/dev/null || true
   cd "${srcdir}/${pkgname}"
   export RUSTUP_TOOLCHAIN=stable
   # The demo feature carries the headless render test, which lays out every

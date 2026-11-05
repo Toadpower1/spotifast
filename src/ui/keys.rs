@@ -18,12 +18,33 @@ pub(super) const WINAMP_SHORTCUT: &str = platform_shortcut("Ctrl+M", "Cmd+Shift+
 pub(super) const MILKDROP_SHORTCUT: &str = platform_shortcut("Ctrl+Shift+K", "Cmd+Shift+K");
 
 pub fn handle(app: &mut App, ctx: &egui::Context) {
+    if app.soloist_view() != crate::app::SoloistView::App {
+        // Setup owns navigation, but the window must still close and quit.
+        // Consume shifted variants first so Cmd+Shift+Q never becomes Quit.
+        ctx.input_mut(|input| {
+            for (key, action) in [(Key::Q, Action::Quit), (Key::W, Action::CloseWindow)] {
+                if !input.consume_key(Modifiers::COMMAND | Modifiers::SHIFT, key)
+                    && input.consume_key(Modifiers::COMMAND, key)
+                {
+                    app.actions.push(action);
+                }
+            }
+        });
+        return;
+    }
     // A focused song row still takes Ctrl+arrow and plain shortcuts to
     // control playback; a text field uses those keys for typing and moving
     // its caret.
     let editing_text = ctx.text_edit_focused();
+    let songs_picked = app.picked_rows(app.page()).is_some();
     let mut actions = Vec::new();
     ctx.input_mut(|input| {
+        // With songs picked, Shift+Q is the song list's: it queues them.
+        let queue_key_is_the_lists = songs_picked
+            && input.events.iter().any(|event| {
+                matches!(event, egui::Event::Key { key: Key::Q, pressed: true, modifiers, .. }
+                    if modifiers.shift_only())
+            });
         let mut key = |modifiers: Modifiers, key: Key, action: Action| {
             if input.consume_key(modifiers, key) {
                 actions.push(action);
@@ -123,14 +144,28 @@ pub fn handle(app: &mut App, ctx: &egui::Context) {
             key(Modifiers::NONE, Key::M, Action::ToggleMute);
             key(Modifiers::NONE, Key::S, Action::ToggleShuffle);
             key(Modifiers::NONE, Key::R, Action::CycleRepeat);
-            key(Modifiers::NONE, Key::Q, Action::ToggleQueuePanel);
+            if !queue_key_is_the_lists {
+                key(Modifiers::NONE, Key::Q, Action::ToggleQueuePanel);
+            }
             key(Modifiers::NONE, Key::L, Action::ToggleLyricsPanel);
             key(Modifiers::NONE, Key::Slash, Action::FocusSearch);
             key(
                 Modifiers::NONE,
                 Key::F,
-                Action::SetLyricsFullscreen(app.lyrics_fullscreen.is_none()),
+                if app.milkdrop_framed() {
+                    Action::MilkdropFullscreen
+                } else {
+                    Action::SetLyricsFullscreen(app.lyrics_fullscreen.is_none())
+                },
             );
+            #[cfg(feature = "milkdrop")]
+            if app.lyrics_fullscreen.is_some() {
+                key(Modifiers::NONE, Key::V, Action::ToggleLyricsMilkdrop);
+                if app.milkdrop_behind_lyrics() {
+                    key(Modifiers::NONE, Key::N, Action::MilkdropEffect(1));
+                    key(Modifiers::NONE, Key::P, Action::MilkdropEffect(-1));
+                }
+            }
         }
     });
     if !editing_text
@@ -269,10 +304,28 @@ pub fn shortcuts(locale: Locale) -> Vec<(Cow<'static, str>, Cow<'static, str>)> 
         (keys("Q"), gettext(locale, "Show the queue")),
         (keys("L"), gettext(locale, "Show the lyrics")),
         (keys("F"), gettext(locale, "Full screen lyrics")),
+        #[cfg(feature = "milkdrop")]
+        (
+            keys("V"),
+            gettext(locale, "Full screen lyrics: MilkDrop behind the words"),
+        ),
+        #[cfg(feature = "milkdrop")]
+        (
+            keys("N  /  P"),
+            gettext(locale, "Full screen lyrics: next or previous preset"),
+        ),
         (keys("Esc"), gettext(locale, "Lyrics: leave full screen")),
         (
             keys("Shift+↑  /  Shift+↓"),
             gettext(locale, "Song list: extend or shrink the selection"),
+        ),
+        (
+            keys("Shift+Q"),
+            gettext(locale, "Song list: add the selected songs to the queue"),
+        ),
+        (
+            keys("Shift+N"),
+            gettext(locale, "Song list: play the selected songs next"),
         ),
         (keys("Delete"), gettext(locale, "Remove from this playlist")),
         (
@@ -330,7 +383,7 @@ pub fn shortcuts(locale: Locale) -> Vec<(Cow<'static, str>, Cow<'static, str>)> 
             keys(platform_shortcut("Ctrl+Shift+B", "Cmd+Shift+B")),
             gettext(locale, "Go to the playing album"),
         ),
-        (keys(WINAMP_SHORTCUT), gettext(locale, "Winamp mini player")),
+        (keys(WINAMP_SHORTCUT), gettext(locale, "Mini player")),
         (
             keys(MILKDROP_SHORTCUT),
             gettext(locale, "MilkDrop, under the mini player"),
@@ -621,10 +674,10 @@ mod tests {
         };
         if cfg!(target_os = "macos") {
             assert_eq!(label("Home"), "Cmd+Shift+H");
-            assert_eq!(label("Winamp mini player"), "Cmd+Shift+M");
+            assert_eq!(label("Mini player"), "Cmd+Shift+M");
         } else {
             assert_eq!(label("Home"), "Ctrl+H");
-            assert_eq!(label("Winamp mini player"), "Ctrl+M");
+            assert_eq!(label("Mini player"), "Ctrl+M");
         }
     }
 
@@ -742,6 +795,24 @@ mod tests {
             "the quit shortcut still quits"
         );
         assert_eq!(
+            press(&mut app, Key::Q, Modifiers::SHIFT),
+            format!("{:?}", [Action::ToggleQueuePanel]),
+            "with no songs picked Shift+Q shows the queue, as it did"
+        );
+        let page = app.page().clone();
+        app.pick_rows(&page, "view", [0].into_iter().collect());
+        assert_eq!(
+            press(&mut app, Key::Q, Modifiers::SHIFT),
+            "[]",
+            "with songs picked Shift+Q is left to the song list"
+        );
+        assert_eq!(
+            press(&mut app, Key::Q, Modifiers::NONE),
+            format!("{:?}", [Action::ToggleQueuePanel]),
+            "Q still shows the queue with songs picked"
+        );
+        app.clear_picked_rows();
+        assert_eq!(
             press(&mut app, Key::B, shift),
             format!("{:?}", [Action::Open(Page::Album(album.unwrap()))]),
             "the album shortcut goes to the album"
@@ -767,6 +838,20 @@ mod tests {
             format!("{:?}", [Action::SetLyricsFullscreen(false)]),
             "F leaves lyrics full screen"
         );
+        if crate::soloist::install::supported() {
+            app.soloist_onboarding = crate::settings::SoloistOnboarding::Welcome;
+            assert_eq!(
+                press(&mut app, Key::Q, command),
+                format!("{:?}", [Action::Quit])
+            );
+            assert_eq!(
+                press(&mut app, Key::W, command),
+                format!("{:?}", [Action::CloseWindow])
+            );
+            assert_eq!(press(&mut app, Key::Q, shift), "[]");
+            assert_eq!(press(&mut app, Key::F, command), "[]");
+            assert_eq!(press(&mut app, Key::Space, Modifiers::NONE), "[]");
+        }
         app.backend.shutdown();
         let _ = std::fs::remove_dir_all(root);
     }

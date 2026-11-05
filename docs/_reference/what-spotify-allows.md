@@ -1,16 +1,17 @@
 ---
 title: What Spotify Lets a Client Do
-description: What Spotify's Web API and librespot provide, and what neither supports.
+description: What Spotify's APIs, librespot and Soloist provide, and where support ends.
 nav_order: 3
 ---
 
 Spotifast uses Spotify's
 [Web API](https://developer.spotify.com/documentation/web-api) for account and
 catalogue data. It uses [librespot](https://github.com/librespot-org/librespot)
-for a few extra details and for audio playback.
+for a few extra details and for built-in audio playback. The optional
+[Soloist player](/soloist/) adds Spotify's own playback implementation.
 
-Features missing from both cannot be added to Spotifast. They may become
-possible if Spotify adds an API or librespot adds lawful support.
+Features need support in the connection that serves them. A name in a
+protocol or an internal capability is not enough to expose a working control.
 
 ## Web API
 
@@ -33,7 +34,7 @@ Spotifast uses the Web API for:
   queue.
 
 Since 0.14.2, Web API requests go through the listener's own Spotify app,
-registered for free in Spotify's developer dashboard
+registered in Spotify's developer dashboard
 ([Getting Started](/getting-started/#make-a-spotify-app)). Spotify grants no
 app the quota to serve everyone: an app in Development Mode lets in at most
 five accounts, and an extension needs a registered business with hundreds of
@@ -96,7 +97,8 @@ clients. Spotifast uses its session for:
   Spotify's own clients, with the session's Login5 bearer and client token.
   It uses the configured HTTP transport and falls back to the Web API, which
   answers only a shared grant from before 0.14.2, if that read is unavailable. A different account's session is never used.
-- **Upcoming album pages.** Prerelease metadata supplies the real album mapping,
+- **Upcoming album pages.** Artist overviews supply countdown cards without a
+  prior pre-save. Prerelease metadata supplies the real album mapping,
   cover and release time. Pathfinder supplies ordered preview rows and explicit
   playability; unpublished rows stay visible without entering playback. The
   session collection service reads pre-save state and writes it only after the
@@ -133,6 +135,8 @@ clients. Spotifast uses its session for:
 - **Play counts** on album pages and an artist's popular songs, from the
   Pathfinder queries Spotify's own pages make. The Web API has none. When
   the read fails, the lists leave the counts out.
+- **Monthly listeners** on an artist page, from the same artist query. The
+  Web API has no such number.
 - **Listening activity**: what the people the account follows are playing,
   from the private feed behind Spotify's own panel. The Web API has no such
   request. Spotify may change this response without notice; when the feed
@@ -154,6 +158,26 @@ Spotifast's librespot fork until a librespot release includes it. Pathfinder
 queries, which librespot does not make, stay in Spotifast. Spotify can change
 any of these without notice, so a feature that uses one falls back to the Web
 API where it has an answer, and otherwise leaves out what it could not read.
+
+## Optional Soloist playback
+
+[Spotify Soloist](/soloist/) can be downloaded and managed from Settings.
+It supplies Spotify's own playback implementation on Linux, Apple Silicon
+macOS and x86_64 Windows. Each listener supplies a personal Soloist key and
+pairs once in the official Spotify app. Spotifast renews expiring builds
+from Spotify's download server and retains its existing library connections.
+Basic controls and state use Soloist's loopback API; collection offsets use
+the existing Spotify playback requests. Full queue editing and audio access
+remain unavailable through Soloist's documented API. On Linux with PipeWire,
+Spotifast processes its owned Soloist output through the operating system for
+EQ and visualizers; it does not capture the system mix.
+[Native audio support](/soloist/#native-audio) adds process-only Mac
+EQ and visualizers, and Windows visualizers. The Mac route applies Spotifast’s
+output volume after the visualizers and hold Soloist's source at 100% once
+redirected. Spotify/phone volume events change that output level before the
+source is reset, so Spotify's indicator returns to 100%. Windows capture
+comes after source volume, which the visualizers undo, and cannot provide an
+audible EQ route.
 
 ## librespot playback
 
@@ -205,8 +229,8 @@ The Web API and librespot do not provide these features:
 - **One Web API app for every listener.** Spotify no longer extends an app
   beyond Development Mode's five accounts for a project like this one, and
   its desktop client identity is turned away from the Web API with "too many
-  requests". Each listener registers a free app of their own instead, which
-  needs Premium on the account that creates it.
+  requests". Each listener registers Spotifast themselves instead, which
+  needs Premium on the account that registers.
 - **Pins shared with the Spotify app.** Spotify stores pins in its private
   `your-library` service. There is no Web API for it, and librespot does not
   support its protocol. Spotifast's pins are local and are stored in
@@ -219,16 +243,11 @@ The Web API and librespot do not provide these features:
 - **Spotify DJ.** Its special playlist context does not expose playable tracks
   to librespot, so Spotifast leaves its card out of Made for you. See
   [librespot issue #1604](https://github.com/librespot-org/librespot/issues/1604).
-- **Lossless audio.** librespot does not receive lossless streams. Spotifast
-  will reconsider this if librespot gains lawful support, but it will not
-  bypass Spotify's DRM.
-- **Soloist as the player.** Spotify's Soloist plays lossless and works with
-  Spotify Connect, but Spotify ships it only for Linux and does not allow apps
-  to bundle it. Each listener would need their own developer key and pairing,
-  builds stop working after 90 days, and it has no API for the library,
-  playlists or search, and no way to feed the equalizer and visualisers.
-  Spotifast will reconsider it if Spotify offers a supported desktop path.
-  See [issue #965](https://github.com/crmne/spotifast/issues/965).
+- **Lossless through librespot.** librespot does not receive lossless streams.
+  The optional [Soloist player](/soloist/) uses Spotify's own implementation.
+  Its API does not report the delivered format or expose raw audio for
+  Spotifast's equalizer and visualisers. The Linux integration uses a private
+  PipeWire audio route instead. Spotifast does not bypass DRM.
 - **Local files from Spotify's Local Files playlist.** librespot cannot play
   that playlist; add the songs to another playlist first. Local files on other
   computers or phones are not shared either: Spotify keeps only their names.

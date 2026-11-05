@@ -13,7 +13,7 @@ Spotifast follows each platform's conventions. On Linux:
 | What | Where | Safe to delete? |
 | --- | --- | --- |
 | Settings | `~/.config/spotifast/settings.json` | Yes, you lose preferences |
-| Winamp skins | `~/.config/spotifast/skins/` | Yes, you add them again |
+| Winamp and Windows Media Player skins | `~/.config/spotifast/skins/` | Yes, you add them again |
 | MilkDrop presets | `~/.config/spotifast/milkdrop/` | Yes, you fetch them again |
 | Spotify grants (available since 0.8.0) | System credential store | Use Sign out in Settings |
 | Credential revocation markers (available since 0.8.0) | `~/.local/state/spotifast/credential-storage/` | Keep after a failed sign-out deletion |
@@ -27,6 +27,7 @@ Spotifast follows each platform's conventions. On Linux:
 | Audio cache | `~/.cache/spotifast/audio/` | Always |
 | Artwork cache | `~/.cache/spotifast/art/` | Always |
 | Lyrics cache | `~/.cache/spotifast/lyrics/` | Always |
+| Skin previews | `~/.cache/spotifast/skin-previews/` | Always, they are drawn again |
 | Account-scoped playlist page cache | `~/.cache/spotifast/playlists/<account-id>/` | Always |
 | Account-scoped playlist list | `~/.cache/spotifast/library/` | Always |
 | Account-scoped Home shelves | `~/.cache/spotifast/home/` | Always |
@@ -45,6 +46,31 @@ where each system keeps it, not in `settings.json`:
 
 Deleting the entry turns it off. Uninstalling Spotifast does not remove the
 Linux or Windows entry; choose **Off** first.
+
+Settings > Storage shows the current file sizes of the artwork cache, audio
+cache and local play history beside their names, in decimal units (1 MB is
+1,000,000 bytes). Sizes are checked in the background while this section is
+visible and refreshed about every five seconds, including after clearing.
+Missing files show 0 B; metadata or directory-traversal errors show Unavailable.
+File contents are not read to measure usage, so a file without read permission
+can still have a size when its metadata is accessible. Artwork counts the files
+its Clear artwork button removes; audio includes nested cache folders.
+Symbolic links are skipped. These are file sizes, so filesystem allocation,
+compression and files still open during playback can affect the disk space
+actually freed. Clear history saves an empty history file rather than deleting
+the file. Sign-in credentials are managed by the system and have no file-size
+estimate here.
+
+**Clear audio** removes cached audio in the background, including when signed
+out or audio caching is disabled. It keeps the cache folder, sign-in, volume,
+history and playback settings. The button shows Clearing while it works and
+the size refreshes when it finishes, including after an error. During an engine
+reconnection, retry once playback is ready. An active cache removes files
+through librespot so its size accounting stays correct; unrecognized files are
+left in place, the rest is still cleared, and a message says how many stayed.
+Playback keeps responding during a clear, and a connection that starts during
+one waits for it to finish. Files still open for playback may keep disk space
+until closed, and ongoing playback can populate the cache again.
 
 Clearing caches never signs you out. Sign-out from Settings covers the shared
 and personal Web API grants and the independent playback credential. It also
@@ -101,7 +127,7 @@ filesystem failure is reported. Revocation markers prevent a failed protected
 entry deletion from restoring the session on restart; keep these markers when
 a deletion failed. Changing the personal Client ID clears that app's old
 grant. Signing out keeps the Client ID, so the next sign-in needs no setup.
-Since 0.14.2 Settings no longer removes the personal app: it is what the
+Since 0.14.2 Settings no longer removes the Client ID: it is what the
 session signs in with. A shared grant saved by an earlier version is kept
 under its own entry with the Client ID it was issued to.
 
@@ -270,7 +296,8 @@ On macOS, settings, state, and the logs are in
 `~/Library/Caches/me.paolino.spotifast`. On Windows, settings are in
 `%APPDATA%\paolino\spotifast\config`, state and the logs in
 `%LOCALAPPDATA%\paolino\spotifast\data`, and the caches in
-`%LOCALAPPDATA%\paolino\spotifast\cache`.
+`%LOCALAPPDATA%\paolino\spotifast\cache`. The main window's size and
+interface memory are in `app.ron`, in `%APPDATA%\spotifast\data` on Windows.
 
 ### Portable copies
 
@@ -282,7 +309,7 @@ it.
 | What | Where |
 | --- | --- |
 | Settings, skins, MilkDrop presets, themes | `spotifast-data\config\` |
-| State, history, logs, credential markers and the encrypted grant copies | `spotifast-data\state\` |
+| State, history, logs, `app.ron`, credential markers and the encrypted grant copies | `spotifast-data\state\` |
 | Caches | `spotifast-data\cache\` |
 
 The first time it starts without that folder, it copies (never moves) your
@@ -292,6 +319,11 @@ again. The installed Spotifast keeps its own files, and from then on the two
 never share settings, history or caches. The copy is made in
 `spotifast-data.partial` and renamed when complete, so a copy interrupted by
 a crash or power cut is made again at the next start.
+
+`app.ron` is in that folder too. A portable copy that has none
+yet starts from a copy of `%APPDATA%\spotifast\data\app.ron`, so the window
+opens as you left it. That file stays where it is, because the installed
+Spotifast uses it; without an installed copy you can delete it.
 
 If Spotifast cannot write next to its executable, for example in
 `Program Files` or on read-only media, it uses the folders above and says why
@@ -323,7 +355,9 @@ directory), a `spotifast` folder in your private temporary directory
 Windows. A portable copy has its own, `instance\scope-portable-<id>` in the
 installed state directory, with one `<id>` per portable folder, so it runs
 beside the installed copy and other portable copies instead of handing your
-launches to them. `instance.lock` marks the running copy; the system releases it when
+launches to them. This is the one thing a portable copy keeps outside its
+folder, because the folder may sit on a drive other users can read. It holds
+nothing of yours. `instance.lock` marks the running copy; the system releases it when
 Spotifast quits or crashes. `instance.sock` (Linux and macOS) is the socket
 a second launch and the `spotifast` command reach it through, which only your
 user can open. On Windows, `instance.key` holds the loopback port and a
@@ -367,7 +401,7 @@ main fields are:
 | `winamp_window` | `false` | The window is the Winamp mini player |
 | `winamp_show_taskbar` | `true` | Windows since 0.8.0, and Linux X11 sessions: show the Winamp window's taskbar button; the main window always keeps its button. Wayland and macOS ignore it |
 | `custom_titlebar` | `false` | Windows and Linux: draw Spotifast's own title bar and window buttons instead of the desktop's |
-| `skin` | none | File or folder name in the skins folder; blank uses the built-in skin |
+| `skin` | `Spotifast Wide` | File or folder name in the skins folder, or `Spotifast Tall` or `Spotifast Wide`; blank uses the built-in Winamp skin |
 | `random_skin` | `false` | Since 0.11.0: pick a different skin (built-in or installed) each time the mini player opens; `skin` holds the one picked |
 | `skin_scale` | by display | Screen pixels per skin pixel, 1 to 4 |
 | `winamp_on_top` | `false` | Keep the mini player above other windows |
@@ -384,17 +418,19 @@ main fields are:
 | `playlist_shaded` | `false` | The playlist window is rolled up to its title bar |
 | `winamp_shaded` | `false` | The main window is rolled up to its title bar |
 | `milkdrop_open` | `false` | The MilkDrop window is open |
-| `milkdrop_seconds` | `30` | How long each MilkDrop preset plays |
+| `milkdrop_seconds` | `10` | How long each MilkDrop preset plays, never less than its 2.7-second fade. A new value applies to the preset playing |
 | `milkdrop_fps` | `60` | MilkDrop frame rate; `0` is uncapped. At most 30 while the system saves energy |
 | `milkdrop_screen_hz` | `0` | Last refresh rate reported by MilkDrop's window |
 | `milkdrop_fullscreen` | `false` | The MilkDrop window fills the screen |
+| `milkdrop_panel_height` | `232` | The MilkDrop panel's height in the mini player, in skin pixels |
+| `lyrics_milkdrop` | `false` | MilkDrop rather than the cover's art behind full screen lyrics |
 | `milkdrop_size` | `640, 480` | The MilkDrop window's size in points |
 | `keep_playing_in_background` | `true` | Close to tray |
 | `tray_icon` | `colour` | Linux and Windows: the tray icon in `colour`, or in `white` or `black` to match the panel or taskbar. macOS ignores it: the menu bar draws its icon black or white to match itself |
 | `mac_notch_widget` | `false` | Show interactive Now Playing widget when hovering over the MacBook notch (macOS only) |
 | `mac_show_in_dock` | `true` | macOS only: show Spotifast in the Dock and Cmd+Tab. `false` keeps it in the menu bar only; the menu-bar icon always stays |
 | `check_for_updates` | `true` | Ask GitHub once a day for a newer release |
-| `web_client_id` | none | Client ID of your own Spotify app, which Spotifast signs in with |
+| `web_client_id` | none | The Client ID you got by registering Spotifast, which it signs in with |
 | `personal_app_nudge_at` | none | Legacy daily-reminder timestamp, retained for older releases |
 | `personal_app_intro_seen` | `false` | Whether the Premium personal-app introduction was dismissed or followed (available since 0.8.0) |
 | `slow_app_banner` | none | When the "Spotify is being slow" banner last appeared (`shown_at`) and how many times it was closed (`dismissals`; at 3 it stops). Kept by the app, not a preference |
@@ -447,20 +483,20 @@ and `--demo-show` adds surfaces on top of it: a comma separated list of
 a normal, narrow, or wide sidebar and collapsed artwork for matching captures.
 `shuffle-selected` and `shuffle-started` capture the selected-mode and
 playback-started outcomes of a collection Shuffle click. `update` shows a sample
-update badge for checking its layout. `personal-app` shows the personal Spotify
-app introduction for a listener on a shared grant, and `slow-banner` the
-banner suggesting one when Spotify slows the shared app down. `audio-key-banner` shows the banner for a song
+update badge for checking its layout. `personal-app` shows the introduction to
+registering Spotifast for a listener on a shared grant, and `slow-banner` the
+banner suggesting it when Spotify slows the shared sign-in down. `audio-key-banner` shows the banner for a song
 whose audio key Spotify refused. `audio-outputs` opens the device picker with sample audio
 outputs to choose from, as Spotifast's own output lists them.
 `signed-out` and `connecting` show the sign-in card, with the steps for
-setting up a Spotify app, before and while the session connects;
+registering Spotifast, before and while the session connects;
 `waiting-for-browser` shows it while the browser is open.
 `sign-in-returning` shows it for a listener with a Client ID saved,
 `sign-in-malformed` with one that cannot be a Client ID, and
 `sign-in-shared-retired`, `sign-in-unknown-client` and `sign-in-not-allowed`
 after each way Spotify can turn a sign-in down. `shared-grant` shows
 Settings for a listener still on a shared grant from before 0.14.2, and
-`own-app` for one using their own app.
+`own-app` for one using their own Client ID.
 `system-light` and `system-dark` choose Follow system on a desktop that is
 light or dark (on Linux), to show the light and dark mode themes; with an
 explicit `--demo-data` directory, its `config/settings.json` and
@@ -684,3 +720,16 @@ For a manual installation, remove only
 Packaged launches recreate missing integration files. To disable the hook
 while keeping the package installed, leave that hook file empty instead;
 existing user files are preserved. Selecting Dark or Light is sufficient to stop following Omarchy's colors.
+
+## Spotify Soloist
+
+**Settings → Spotify Soloist** offers the optional Spotify player. The
+`soloist_enabled` preference defaults to false. Its personal key lives in the
+system credential store, never in settings. Under the state directory,
+`soloist/builds/` holds downloaded executables, license notices and build
+records; `soloist/accounts/` holds private, account-scoped pairing state and a
+bounded audio cache. `soloist/instance-id` holds a random installation identity
+so computers with the same account and directory layout get distinct player
+names. Turning Soloist off keeps these for next time. Sign-out
+deletes its key and pairing state. See [Soloist setup](/soloist/) for platform
+support, expiry renewal, networking and audio limitations.

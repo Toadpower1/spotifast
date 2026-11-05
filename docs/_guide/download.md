@@ -16,8 +16,18 @@ nav_order: 1
 
 The current version is **v{{ v }}**. You can use the
 [download checksums]({{ base }}/checksums.txt) to check that a file has not
-been damaged or changed. Older versions are on the
-[releases page](https://github.com/crmne/spotifast/releases).
+been damaged or changed; the DEB and RPM packages are listed in the
+[package checksums]({{ base }}/packaging-checksums.txt). Older versions are on
+the [releases page](https://github.com/crmne/spotifast/releases).
+
+| System | Ways to install |
+| --- | --- |
+| **macOS** (Apple Silicon and Intel) | [Disk image](#macos), [Homebrew](#macos), [Nix](#nix-darwin) |
+| **Windows** (x64 and ARM) | [Installer](#windows), [ZIP](#windows) |
+| **Debian, Ubuntu** (x64 and ARM) | [DEB package](#debian-and-ubuntu) |
+| **Fedora** (x64 and ARM) | [RPM package](#fedora) |
+| **Arch Linux** (x64) | [AUR](#arch-linux) |
+| **Any Linux** | [Flatpak](#flatpak) (x64), [AppImage](#appimage), [archive](#other-distributions), [Nix](#nix), [source](#build-from-source) |
 
 ## macOS
 
@@ -56,10 +66,11 @@ or the ARM version if your PC uses an ARM processor:
 - [Windows installer (ARM PCs)]({{ base }}/spotifast-v{{ v }}-aarch64-pc-windows-msvc{{ windows_installer }})
 {% if windows_installer == ".msi" %}
 The installer is a Windows Installer package (`.msi`). Spotifast installed
-with the earlier setup program (`-setup.exe`) moves to it through its own
-updates, or right away when you run the new installer, and keeps its settings,
-its folder and its Start menu entry. Windows then lists one Spotifast under
-installed apps.
+with the earlier setup program (`-setup.exe`) moves to it when you run the new
+installer, and keeps its settings, its folder and its Start menu entry.
+Windows then lists one Spotifast under installed apps. Versions 0.13.0 and
+later also move to it through their own updates; 0.12.x and earlier no longer
+find updates, so run the installer once by hand.
 {% endif %}
 To run Spotifast without an installer, download a ZIP file, extract it, and
 open `spotifast.exe`. Since 0.13.4, it keeps its settings, state and caches
@@ -69,9 +80,9 @@ in a `spotifast-data` folder next to it, so the folder carries everything
 - [Windows ZIP (most PCs)]({{ base }}/spotifast-v{{ v }}-x86_64-pc-windows-msvc.zip)
 - [Windows ZIP (ARM PCs)]({{ base }}/spotifast-v{{ v }}-aarch64-pc-windows-msvc.zip)
 
-Either way, SmartScreen may warn about an unknown publisher on first run;
-choose **More info**, then **Run anyway**. The Windows files are not signed
-with a publisher certificate, so Windows has no publisher name to show.
+The Windows executable and installer are signed as **PlentyLabs UG
+(haftungsbeschränkt) & Co. KG**. SmartScreen may still show a warning while
+the publisher builds reputation.
 
 Spotifast needs OpenGL 2.0 or newer, which every current Windows graphics
 driver provides. In a virtual machine or remote session that only has the
@@ -105,16 +116,48 @@ as incorrectly detected.
 
 ## Linux
 
+The DEB, RPM, AppImage and archive need glibc 2.39 or newer: Ubuntu 24.04,
+Debian 13, Fedora 41 or a newer release of each.
+
+### Debian and Ubuntu
+
+- [DEB package (Intel and AMD, 64-bit)]({{ base }}/spotifast_{{ v }}_amd64.deb)
+- [DEB package (ARM, 64-bit)]({{ base }}/spotifast_{{ v }}_arm64.deb)
+
+Install it with apt, which also installs the libraries it needs:
+
+```sh
+sudo apt install ~/Downloads/spotifast_{{ v }}_amd64.deb   # or _arm64.deb
+```
+
+To update, download and install the new release the same way. To remove
+it, run `sudo apt remove spotifast`.
+
+### Fedora
+
+- [RPM package (Intel and AMD, 64-bit)]({{ base }}/spotifast-{{ v }}-1.x86_64.rpm)
+- [RPM package (ARM, 64-bit)]({{ base }}/spotifast-{{ v }}-1.aarch64.rpm)
+
+```sh
+sudo dnf install ~/Downloads/spotifast-{{ v }}-1.x86_64.rpm   # or .aarch64.rpm
+```
+
+To update, download and install the new release the same way. To remove
+it, run `sudo dnf remove spotifast`.
+
 ### Arch Linux
 
 Spotifast is in the AUR, Arch's community package collection. Installing it
-also adds it to your app launcher:
+also adds it to your app launcher. With [yay](https://github.com/Jguer/yay)
+or [paru](https://github.com/Morganamilo/paru):
 
 ```sh
 yay -S spotifast-bin      # the released build, ready made
 yay -S spotifast          # the release, built from source
 yay -S spotifast-git      # built from the latest commit
 ```
+
+`paru -S` takes the same package names.
 
 ### Flatpak
 
@@ -147,8 +190,8 @@ chmod +x ~/Downloads/spotifast-{{ v }}-x86_64.AppImage
 ~/Downloads/spotifast-{{ v }}-x86_64.AppImage
 ```
 
-The AppImage bundles no libraries: like the DEB and RPM, it needs glibc 2.39
-or newer and your desktop's own libraries. Running it needs FUSE; without
+The AppImage bundles no libraries: like the DEB and RPM, it uses your
+desktop's own libraries. Running it needs FUSE; without
 FUSE, start it with `--appimage-extract-and-run`.
 
 From the release after 0.13.3, the AppImage updates itself like the portable
@@ -169,7 +212,11 @@ handling `spotify:` links.
 The binary needs the ALSA and PipeWire libraries, and Wayland or X11. It plays
 through PipeWire, a PulseAudio server, or ALSA, whichever is running.
 
-Or build from source: see the [build instructions](/getting-started/#build-from-source).
+### Build from source
+
+Download the [source archive]({{ base }}/spotifast-v{{ v }}-source.tar.gz),
+which the [download checksums]({{ base }}/checksums.txt) also cover, and
+follow the [build instructions](/getting-started/#build-from-source).
 
 ## Nix
 

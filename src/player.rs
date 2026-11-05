@@ -17,16 +17,17 @@ use librespot_connect::{
     Spirc,
 };
 use librespot_core::{
-    SpotifyUri,
+    FileId, SpotifyUri,
     authentication::Credentials,
     cache::Cache,
     config::{DeviceType, SessionConfig},
+    dealer::{manager::BoxedStreamResult, protocol::Message},
     error::ErrorKind,
     session::Session,
     spotify_id::SpotifyId,
 };
 use librespot_metadata::{
-    Album as MetadataAlbum, Metadata,
+    Album as MetadataAlbum, Metadata, Track as MetadataTrack,
     album::AlbumType,
     audio::{AudioItem, UniqueFields},
 };
@@ -36,6 +37,7 @@ use librespot_playback::{
     mixer::{self, Mixer, MixerConfig, NoOpVolume, VolumeGetter},
     player::{Player, PlayerEvent},
 };
+use librespot_protocol::connect::{Cluster, ClusterUpdate};
 use sha1::{Digest, Sha1};
 
 use crate::api::models::ArtistRef;
@@ -316,6 +318,99 @@ pub enum EngineEvent {
         name: String,
         id: String,
     },
+    /// Spotify pushed a change to playback on another device: a switch,
+    /// play or pause, another song or collection, shuffle or repeat.
+    RemoteChanged,
+    /// Spotify pushed a new volume for the device playing elsewhere, and
+    /// nothing else changed. It carries the value, so no poll is needed.
+    RemoteVolume {
+        device_id: String,
+        volume: u16,
+    },
+}
+
+/// The parts of a Connect cluster push that the interface shows for
+/// another device. Spotify pushes the whole cluster on every change
+/// anywhere, including position heartbeats and this device's own updates,
+/// so only a difference here is worth asking the Web API about.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+struct ClusterView {
+    active_device: String,
+    context: String,
+    track: String,
+    playing: bool,
+    shuffle: bool,
+    repeat_context: bool,
+    repeat_track: bool,
+    volume: Option<u32>,
+}
+
+impl ClusterView {
+    fn of(cluster: &Cluster) -> Self {
+        let state = &cluster.player_state;
+        Self {
+            active_device: cluster.active_device_id.clone(),
+            context: state.context_uri.clone(),
+            track: state.track.uri.clone(),
+            playing: state.is_playing && !state.is_paused,
+            shuffle: state.options.shuffling_context,
+            repeat_context: state.options.repeating_context,
+            repeat_track: state.options.repeating_track,
+            volume: cluster
+                .device
+                .get(&cluster.active_device_id)
+                .map(|device| device.volume),
+        }
+    }
+
+    /// Whether going from `self` to `next` changed what the interface shows
+    /// for another device. While this device plays before and after, the
+    /// engine's own events already carry every change.
+    fn changed_elsewhere(&self, next: &Self, own_device: &str) -> bool {
+        let ours = self.active_device == own_device && next.active_device == own_device;
+        self != next && !ours
+    }
+
+    /// The new volume, when it is all that changed on the same device.
+    fn volume_only(&self, next: &Self) -> Option<u16> {
+        let volume = next.volume?;
+        let same_otherwise = Self {
+            volume: next.volume,
+            ..self.clone()
+        } == *next;
+        same_otherwise.then(|| volume.min(u32::from(u16::MAX)) as u16)
+    }
+}
+
+/// Forwards cluster pushes that change another device's playback, so the
+/// interface shows them at once instead of on its next poll: a new volume
+/// as it is, anything else as a reason to poll. Spotify pushes no cluster
+/// back for this device's own announcement, so the first push often is the
+/// next change on another device, and it counts as one: at most one extra
+/// poll per connect.
+async fn watch_cluster(
+    mut updates: BoxedStreamResult<ClusterUpdate>,
+    own_device: String,
+    notify: Notify,
+) {
+    use futures_util::StreamExt as _;
+    let mut shown = ClusterView::default();
+    while let Some(update) = updates.next().await {
+        let Some(cluster) = update.ok().and_then(|update| update.cluster.into_option()) else {
+            continue;
+        };
+        let view = ClusterView::of(&cluster);
+        if shown.changed_elsewhere(&view, &own_device) {
+            notify(match shown.volume_only(&view) {
+                Some(volume) => EngineEvent::RemoteVolume {
+                    device_id: view.active_device.clone(),
+                    volume,
+                },
+                None => EngineEvent::RemoteChanged,
+            });
+        }
+        shown = view;
+    }
 }
 
 pub type Notify = Arc<dyn Fn(EngineEvent) + Send + Sync>;
@@ -447,6 +542,23 @@ impl Engine {
             // the new session. The song already playing keeps fetching the
             // rest of its file as it did.
             player.set_session(session.clone());
+        }
+
+        // Subscribed before the Spirc task starts the dealer, while its
+        // builder still takes subscriptions. Without it the interface still
+        // polls; it only learns of other devices' changes later.
+        match session
+            .dealer()
+            .listen_for("hm://connect-state/v1/cluster", Message::from_raw)
+        {
+            Ok(updates) => {
+                tokio::spawn(watch_cluster(
+                    updates,
+                    config.device_id(),
+                    Arc::clone(&notify),
+                ));
+            }
+            Err(error) => log::warn!("cluster updates unavailable: {error}"),
         }
 
         {
@@ -643,10 +755,41 @@ impl Engine {
         else {
             return Ok(None);
         };
-        match self.session.spclient().get_lyrics(&id).await {
-            Ok(bytes) => Ok(serde_json::from_slice(&bytes).ok()),
-            Err(error) if error.kind == ErrorKind::NotFound => Ok(None),
-            Err(error) => Err(anyhow!("spotify lyrics: {error}")),
+        let cover = self.album_cover(&id).await;
+        let endpoint = lyrics_endpoint(&id, cover.as_ref());
+        let answer = self
+            .session
+            .spclient()
+            .request_as_json(&reqwest::Method::GET, &endpoint, None, None)
+            .await;
+        match answer {
+            Ok(bytes) => {
+                let (json, outcome) = read_lyrics(&bytes);
+                log::info!("spotify lyrics {track_uri}: {outcome}");
+                Ok(json)
+            }
+            // A redirect lands here too: librespot files it under not found,
+            // and only the status in the error tells them apart.
+            Err(error) if error.kind == ErrorKind::NotFound => {
+                log::info!("spotify lyrics {track_uri}: not found ({error})");
+                Ok(None)
+            }
+            Err(error) => {
+                log::info!("spotify lyrics {track_uri}: failed ({error})");
+                Err(anyhow!("spotify lyrics: {error}"))
+            }
+        }
+    }
+
+    /// The track's album cover, which the lyrics request names.
+    async fn album_cover(&self, id: &SpotifyId) -> Option<FileId> {
+        let uri = SpotifyUri::Track { id: *id };
+        match MetadataTrack::get(&self.session, &uri).await {
+            Ok(track) => track.album.covers.first().map(|cover| cover.id),
+            Err(error) => {
+                log::debug!("no cover to ask for lyrics with: {error}");
+                None
+            }
         }
     }
 
@@ -1254,6 +1397,38 @@ fn decode_folder_name(encoded: &str) -> String {
         }
     }
     String::from_utf8_lossy(&out).into_owned()
+}
+
+/// The request Spotify's own client makes for a track's lyrics, which names
+/// the album cover. Every lookup without the cover came back 404, so it stays
+/// only for a track whose cover could not be read.
+fn lyrics_endpoint(id: &SpotifyId, cover: Option<&FileId>) -> String {
+    let track = id.to_base62();
+    let query = "format=json&vocalRemoval=false&market=from_token";
+    match cover {
+        Some(cover) => {
+            format!("/color-lyrics/v2/track/{track}/image/spotify:image:{cover}?{query}")
+        }
+        None => format!("/color-lyrics/v2/track/{track}?{query}"),
+    }
+}
+
+/// What came back for a lyrics request, and what to log of it: its shape and
+/// size, never its words.
+fn read_lyrics(bytes: &[u8]) -> (Option<serde_json::Value>, String) {
+    let Ok(json) = serde_json::from_slice::<serde_json::Value>(bytes) else {
+        return (None, format!("unparseable, {} bytes", bytes.len()));
+    };
+    let lines = json
+        .get("lyrics")
+        .and_then(|lyrics| lyrics.get("lines"))
+        .and_then(|lines| lines.as_array())
+        .map(Vec::len);
+    let outcome = match lines {
+        Some(lines) => format!("found, {lines} lines"),
+        None => format!("no lines in the answer, {} bytes", bytes.len()),
+    };
+    (Some(json), outcome)
 }
 
 #[cfg(test)]
@@ -1891,5 +2066,136 @@ mod tests {
     fn an_engine_is_heard_at_the_level_set_last() {
         let set_here = 3276;
         assert_eq!(Heard::at(set_here).level(), set_here);
+    }
+    fn cluster(active: &str, track: &str, playing: bool, volume: u32) -> Cluster {
+        let mut cluster = Cluster::new();
+        cluster.active_device_id = active.into();
+        let state = cluster.player_state.mut_or_insert_default();
+        state.track.mut_or_insert_default().uri = track.into();
+        state.is_playing = playing;
+        let mut device = librespot_protocol::connect::DeviceInfo::new();
+        device.volume = volume;
+        cluster.device.insert(active.into(), device);
+        cluster
+    }
+
+    /// A knob turned on the speaker that plays is news; the position
+    /// heartbeats Spotify pushes in between are not.
+    #[test]
+    fn another_devices_volume_is_news_and_its_heartbeat_is_not() {
+        let before = cluster("sonos", "spotify:track:a", true, 30_000);
+        let shown = ClusterView::of(&before);
+
+        let mut heartbeat = before.clone();
+        let state = heartbeat.player_state.mut_or_insert_default();
+        state.timestamp = 1_000;
+        state.position_as_of_timestamp = 61_000;
+        assert!(!shown.changed_elsewhere(&ClusterView::of(&heartbeat), "this"));
+
+        let louder = cluster("sonos", "spotify:track:a", true, 32_000);
+        assert!(shown.changed_elsewhere(&ClusterView::of(&louder), "this"));
+        assert_eq!(shown.volume_only(&ClusterView::of(&louder)), Some(32_000));
+    }
+
+    /// A new volume alone is shown as pushed; with anything else it waits
+    /// for the poll, which brings both.
+    #[test]
+    fn a_volume_alone_is_carried_and_with_more_it_is_polled() {
+        let shown = ClusterView::of(&cluster("sonos", "spotify:track:a", true, 30_000));
+        for next in [
+            cluster("phone", "spotify:track:a", true, 32_000),
+            cluster("sonos", "spotify:track:b", true, 32_000),
+            cluster("sonos", "spotify:track:a", false, 32_000),
+        ] {
+            assert_eq!(shown.volume_only(&ClusterView::of(&next)), None);
+        }
+        let mut gone = cluster("sonos", "spotify:track:a", true, 30_000);
+        gone.device.clear();
+        assert_eq!(shown.volume_only(&ClusterView::of(&gone)), None);
+    }
+
+    #[test]
+    fn a_switch_pause_or_new_song_elsewhere_is_news() {
+        let shown = ClusterView::of(&cluster("sonos", "spotify:track:a", true, 30_000));
+        for next in [
+            cluster("phone", "spotify:track:a", true, 30_000),
+            cluster("sonos", "spotify:track:a", false, 30_000),
+            cluster("sonos", "spotify:track:b", true, 30_000),
+        ] {
+            assert!(shown.changed_elsewhere(&ClusterView::of(&next), "this"));
+        }
+        let mut shuffled = cluster("sonos", "spotify:track:a", true, 30_000);
+        shuffled
+            .player_state
+            .mut_or_insert_default()
+            .options
+            .mut_or_insert_default()
+            .shuffling_context = true;
+        assert!(shown.changed_elsewhere(&ClusterView::of(&shuffled), "this"));
+        // Another collection started at the same song changes Playing from.
+        let mut playlist = cluster("sonos", "spotify:track:a", true, 30_000);
+        playlist.player_state.mut_or_insert_default().context_uri = "spotify:playlist:b".into();
+        assert!(shown.changed_elsewhere(&ClusterView::of(&playlist), "this"));
+    }
+
+    /// The first push after connecting is often already a change on another
+    /// device, such as a pause on the phone, so it is news and polls.
+    #[test]
+    fn the_first_push_after_connecting_is_news() {
+        let first = ClusterView::of(&cluster("sonos", "spotify:track:a", false, 30_000));
+        assert!(ClusterView::default().changed_elsewhere(&first, "this"));
+        assert_eq!(ClusterView::default().volume_only(&first), None);
+    }
+
+    /// While this device plays, its own events carry every change, so its
+    /// pushes ask for no poll. Playback leaving it, or arriving, does.
+    #[test]
+    fn this_devices_own_playback_is_not_news_but_leaving_it_is() {
+        let ours = ClusterView::of(&cluster("this", "spotify:track:a", true, 30_000));
+        let next_song = ClusterView::of(&cluster("this", "spotify:track:b", true, 20_000));
+        assert!(!ours.changed_elsewhere(&next_song, "this"));
+
+        let elsewhere = ClusterView::of(&cluster("sonos", "spotify:track:b", true, 20_000));
+        assert!(ours.changed_elsewhere(&elsewhere, "this"));
+        assert!(elsewhere.changed_elsewhere(&ours, "this"));
+    }
+
+    /// The log says which of the ways to no lyrics it was, without the words.
+    #[test]
+    fn a_lyrics_answer_is_described_by_its_shape_and_never_its_words() {
+        let (json, outcome) = read_lyrics(b"<html>secret</html>");
+        assert!(json.is_none());
+        assert_eq!(outcome, "unparseable, 19 bytes");
+        assert_eq!(read_lyrics(b"").1, "unparseable, 0 bytes");
+
+        let body = br#"{"lyrics":{"lines":[{"words":"secret"},{"words":"words"}]}}"#;
+        let (json, outcome) = read_lyrics(body);
+        assert!(json.is_some());
+        assert_eq!(outcome, "found, 2 lines");
+
+        let (json, outcome) = read_lyrics(b"{\"message\":\"secret\"}");
+        assert!(json.is_some(), "a body the caller still gets to read");
+        assert_eq!(outcome, "no lines in the answer, 20 bytes");
+    }
+
+    /// The official client's request, cover included; librespot adds its
+    /// `product`, `country` and `salt` after an `&`.
+    #[test]
+    fn the_lyrics_request_names_the_album_cover() {
+        let id = SpotifyId::from_base62("4uLU6hMCjMI75M1A2tKUQC").unwrap();
+        let cover = FileId::from_raw(&[0xab; 20]);
+        assert_eq!(
+            lyrics_endpoint(&id, Some(&cover)),
+            format!(
+                "/color-lyrics/v2/track/4uLU6hMCjMI75M1A2tKUQC/image/spotify:image:{}\
+                 ?format=json&vocalRemoval=false&market=from_token",
+                "ab".repeat(20)
+            )
+        );
+        assert_eq!(
+            lyrics_endpoint(&id, None),
+            "/color-lyrics/v2/track/4uLU6hMCjMI75M1A2tKUQC\
+             ?format=json&vocalRemoval=false&market=from_token"
+        );
     }
 }
