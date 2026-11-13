@@ -45,7 +45,15 @@ jobs:
           Write-Host "Passive Mode before sync: $before"
           Write-Host "Upstream main: $(git rev-parse upstream/main)"
 
-          git merge upstream/main --no-edit
+          git merge-base --is-ancestor upstream/main HEAD
+          if ($LASTEXITCODE -eq 0) {
+            Write-Host "Already up to date with upstream."
+            "changed=false" >> $env:GITHUB_OUTPUT
+            "sha=$before" >> $env:GITHUB_OUTPUT
+            exit 0
+          }
+
+          git merge upstream/main --no-commit --no-ff
 
           if ($LASTEXITCODE -ne 0) {
             Write-Host ""
@@ -56,20 +64,22 @@ jobs:
             exit 1
           }
 
+          if (Test-Path ".github\workflows") {
+            git restore --source=HEAD --staged --worktree .github/workflows
+          }
+
+          git commit -m "Merge upstream main into passive-mode"
+
           $after = (git rev-parse HEAD).Trim()
-          $changed = $before -ne $after
-
           Write-Host "Passive Mode after sync: $after"
-          Write-Host "Upstream changes found: $changed"
 
-          "changed=$($changed.ToString().ToLower())" >> $env:GITHUB_OUTPUT
+          "changed=true" >> $env:GITHUB_OUTPUT
           "sha=$after" >> $env:GITHUB_OUTPUT
 
       - name: Install Spotifast Rust toolchain
         shell: pwsh
         run: |
           $match = Select-String -Path rust-toolchain.toml -Pattern '^\s*channel\s*=\s*"([^"]+)"'
-
           if (-not $match) {
             throw "Could not find the Rust channel in rust-toolchain.toml"
           }
@@ -83,14 +93,50 @@ jobs:
           rustc --version
           cargo --version
 
-      - name: Build Passive Mode
+      - name: Prepare MilkDrop build dependencies
         shell: pwsh
-        run: cargo build --locked --release --no-default-features
+        run: |
+          cmake --version
+          clang --version
+
+          $vcpkgCmd = Get-Command vcpkg.exe -ErrorAction SilentlyContinue
+
+          if ($vcpkgCmd) {
+            $vcpkgRoot = Split-Path $vcpkgCmd.Source -Parent
+          } elseif (Test-Path "C:\vcpkg\vcpkg.exe") {
+            $vcpkgRoot = "C:\vcpkg"
+          } else {
+            throw "vcpkg was not found on this Windows runner."
+          }
+
+          Write-Host "VCPKG_INSTALLATION_ROOT=$vcpkgRoot"
+          "VCPKG_INSTALLATION_ROOT=$vcpkgRoot" >> $env:GITHUB_ENV
+
+          & "$vcpkgRoot\vcpkg.exe" install glew:x64-windows-static
+
+          if ($LASTEXITCODE -ne 0) {
+            throw "vcpkg failed to install glew:x64-windows-static"
+          }
+
+          $clangCmd = Get-Command clang.exe -ErrorAction SilentlyContinue
+          if ($clangCmd) {
+            $clangBin = Split-Path $clangCmd.Source -Parent
+            if (Test-Path (Join-Path $clangBin "libclang.dll")) {
+              Write-Host "LIBCLANG_PATH=$clangBin"
+              "LIBCLANG_PATH=$clangBin" >> $env:GITHUB_ENV
+            }
+          }
+
+      - name: Build Passive Mode with MilkDrop
+        shell: pwsh
+        run: |
+          cargo build --locked --release
 
       - name: Push updated Passive Mode branch
         if: steps.sync.outputs.changed == 'true'
         shell: pwsh
-        run: git push origin HEAD:passive-mode
+        run: |
+          git push origin HEAD:passive-mode
 
       - name: Package Windows build
         shell: pwsh
@@ -109,11 +155,16 @@ jobs:
           Spotifast version: $version
           Passive Mode commit: $sha
 
+          Features in this build:
+          - Passive Album Mode
+          - MilkDrop
+          - Soloist native audio capture
+
           Automatically synced from:
           https://github.com/crmne/spotifast
 
           Build:
-          cargo build --locked --release --no-default-features
+          cargo build --locked --release
           "@ | Set-Content -Encoding UTF8 dist\README.txt
 
           Compress-Archive `
