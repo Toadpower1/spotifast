@@ -752,11 +752,9 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
     let gapless = gettext(locale, "Gapless playback");
     let passive_mode = gettext(locale, "Passive mode");
     let keep_playing = gettext(locale, "Keep music playing when the window closes");
-    let update_checks = gettext(locale, "Automatic update checks");
     let audio_cache = gettext(locale, "Audio cache");
     let apply_playback = gettext(locale, "Apply and restart playback");
     let apply_playback_note = gettext(locale, "Restart local playback to apply these settings.");
-    let download_updates = gettext(locale, "Download updates automatically");
     let show_in_dock = gettext(locale, "Show in Dock");
     let start_with_computer = gettext(locale, "Start with your computer");
     let start_choice = app.start_with_computer();
@@ -811,10 +809,6 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
             .to_owned(),
         ),
         RowText::new(
-            update_checks.clone(),
-            gettext(locale, "Checks GitHub once a day. No personal data is sent."),
-        ),
-        RowText::new(
             gettext(locale, "Output buffer"),
             gettext(
                 locale,
@@ -828,13 +822,6 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
         ),
         RowText::new(apply_playback.clone(), apply_playback_note.clone()).when(playback_dirty),
         RowText::new(gettext(locale, "Playback settings applied"), "").when(!playback_dirty),
-        RowText::new(
-            download_updates.clone(),
-            gettext(
-                locale,
-                "Downloads in the background. You choose when to restart.",
-            ),
-        ),
         RowText::new(
             gettext(locale, "MacBook notch widget"),
             gettext(
@@ -867,7 +854,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
             ),
         ),
     ];
-    for index in [0, 1, 2, 3, 4, 5, 8, 9, 10, 11, 14] {
+    for index in [0, 1, 2, 3, 4, 5, 7, 8, 9, 10, 12] {
         playback_rows[index].available &= built_in;
     }
     if section_matches(&needle, &playback, &playback_rows) {
@@ -1021,7 +1008,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
             });
             // Applied by the app's next pass (App::sync_dock_icon).
             #[cfg(target_os = "macos")]
-            filtered_row(ui, &palette, &needle, &playback, &playback_rows[15], |ui| {
+            filtered_row(ui, &palette, &needle, &playback, &playback_rows[13], |ui| {
                 if widgets::switch(
                     ui,
                     &palette,
@@ -1051,7 +1038,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                     &palette,
                     &needle,
                     &playback,
-                    &playback_rows[16],
+                    &playback_rows[14],
                     choices_width,
                     |ui| {
                         let mut choose = |ui: &mut egui::Ui, icon: TrayIcon, label: &str| {
@@ -1095,12 +1082,12 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                     &palette,
                     &needle,
                     &playback,
-                    &playback_rows[17],
+                    &playback_rows[15],
                     start_choice,
                 );
             }
             #[cfg(target_os = "macos")]
-            filtered_row(ui, &palette, &needle, &playback, &playback_rows[13], |ui| {
+            filtered_row(ui, &palette, &needle, &playback, &playback_rows[11], |ui| {
                 if widgets::switch(
                     ui,
                     &palette,
@@ -1112,32 +1099,8 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                     changed = true;
                 }
             });
-            filtered_row(ui, &palette, &needle, &playback, &playback_rows[7], |ui| {
-                if widgets::switch(
-                    ui,
-                    &palette,
-                    &update_checks,
-                    &mut app.settings.check_for_updates,
-                )
-                .changed()
-                {
-                    changed = true;
-                }
-            });
-            filtered_row(ui, &palette, &needle, &playback, &playback_rows[12], |ui| {
-                if widgets::switch(
-                    ui,
-                    &palette,
-                    &download_updates,
-                    &mut app.settings.download_updates_automatically,
-                )
-                .changed()
-                {
-                    changed = true;
-                }
-            });
             #[cfg(windows)]
-            filtered_row(ui, &palette, &needle, &playback, &playback_rows[8], |ui| {
+            filtered_row(ui, &palette, &needle, &playback, &playback_rows[7], |ui| {
                 ui.horizontal(|ui| {
                     ui.spacing_mut().item_spacing.x = 6.0;
                     let current = app.settings.audio_buffer_ms;
@@ -1173,7 +1136,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                 &palette,
                 &needle,
                 &playback,
-                &playback_rows[14],
+                &playback_rows[12],
                 folder_controls_width,
                 |ui| {
                     // The control area lays out right-to-left: add the rightmost item first.
@@ -1199,7 +1162,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                     }
                 },
             );
-            filtered_row(ui, &palette, &needle, &playback, &playback_rows[9], |ui| {
+            filtered_row(ui, &palette, &needle, &playback, &playback_rows[8], |ui| {
                 // The control area lays out right-to-left: add the rightmost item first.
                 ui.horizontal(|ui| {
                     ui.spacing_mut().item_spacing.x = 6.0;
@@ -1233,8 +1196,8 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
             ui.add_space(4.0);
             if built_in
                 && (playback_dirty
-                    || playback_rows[10].matches(&needle, &playback)
-                    || playback_rows[11].matches(&needle, &playback))
+                    || playback_rows[9].matches(&needle, &playback)
+                    || playback_rows[10].matches(&needle, &playback))
             {
                 ui.horizontal(|ui| {
                     if playback_dirty {
@@ -2498,6 +2461,55 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                 }
             });
             filtered_row(ui, &palette, &needle, &storage, &storage_rows[3], |_| {});
+        });
+    }
+
+    let updates = gettext(locale, "Updates");
+    let update_checks = gettext(locale, "Automatic update checks");
+    let update_automatically_label = gettext(locale, "Update automatically");
+    let update_rows = [
+        RowText::new(
+            update_checks.clone(),
+            gettext(
+                locale,
+                "Checks GitHub once a day. No personal data is sent.",
+            ),
+        ),
+        RowText::new(
+            update_automatically_label.clone(),
+            gettext(
+                locale,
+                "Downloads new releases in the background and installs them the next time Spotifast starts.",
+            ),
+        ),
+    ];
+    if section_matches(&needle, &updates, &update_rows) {
+        any_visible = true;
+        section(ui, &palette, &updates, |ui| {
+            filtered_row(ui, &palette, &needle, &updates, &update_rows[0], |ui| {
+                if widgets::switch(
+                    ui,
+                    &palette,
+                    &update_checks,
+                    &mut app.settings.check_for_updates,
+                )
+                .changed()
+                {
+                    changed = true;
+                }
+            });
+            filtered_row(ui, &palette, &needle, &updates, &update_rows[1], |ui| {
+                if widgets::switch(
+                    ui,
+                    &palette,
+                    &update_automatically_label,
+                    &mut app.settings.update_automatically,
+                )
+                .changed()
+                {
+                    changed = true;
+                }
+            });
         });
     }
 
